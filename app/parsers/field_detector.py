@@ -6,7 +6,7 @@ from app.models.field_mapping import DetectedField, StandardField
 
 ALIASES = {
  StandardField.NAME:{"姓名","学生姓名","名字","学生名字","学生"}, StandardField.STUDENT_NUMBER:{"学号","学生学号","学生编号","学籍号","编号"},
- StandardField.CLASS_NAME:{"班级","行政班","所在班级","专业班级","学生班级"}, StandardField.LATE:{"迟到","晚到","迟到人员","迟到名单","迟到学生"},
+ StandardField.CLASS_NAME:{"班级","行政班","所在行政班","所在班级","专业班级","学生班级"}, StandardField.LATE:{"迟到","晚到","迟到人员","迟到名单","迟到学生"},
  StandardField.ABSENT:{"缺勤","缺席","未到","未到人员","缺课","缺勤人员"}, StandardField.LEAVE:{"请假","请假人员","请假学生"},
  StandardField.EXPECTED:{"应到","应到人数","应到数","总人数"}, StandardField.ACTUAL:{"实到","实到人数","到课人数","实际到课"}, StandardField.PHONE:{"联系电话","手机","手机号","电话"},
  StandardField.DATE:{"日期","时间","检查日期","考勤日期"}, StandardField.COURSE:{"课程","课程名称","科目"},

@@ -32,6 +32,9 @@ from app.ai.deepseek_client import DeepSeekClient
 from app.ai.deepseek_parser import DeepSeekParser
 from app.ui.template_page import TemplatePage
 from app.ui.settings_page import SettingsPage
+from app.services.data_workspace_service import DataWorkspaceService
+from app.ui.merge_page import MergePage
+from app.ui.workbook_fill_page import WorkbookFillPage
 
 
 APP_STYLE = """
@@ -102,6 +105,8 @@ class MainWindow(QMainWindow):
             ("students", "学生库"),
             ("classes", "班级库"),
             ("dormitories", "寝室库"),
+            ("merge", "资料汇总"),
+            ("workbook_fill", "表格填充"),
             ("statistics", "汇总统计"),
             ("templates", "模板生成"),
             ("history", "历史记录"),
@@ -132,6 +137,9 @@ class MainWindow(QMainWindow):
         self.template_service = TemplateService(self.service)
         self.template_page = TemplatePage(self.template_service, DeepSeekParser(DeepSeekClient()))
         self.settings_page = SettingsPage()
+        self.data_workspace = DataWorkspaceService()
+        self.merge_page = MergePage(self.data_workspace)
+        self.workbook_fill_page = WorkbookFillPage(self.data_workspace, self.service)
         self._add_page("home", self.home_page)
         self._add_page("tasks", self.task_page)
         self._add_page("students", self.student_page)
@@ -139,6 +147,8 @@ class MainWindow(QMainWindow):
         self._add_page("dormitories", self.dormitory_page)
         self._add_page("imports", self.import_page)
         self._add_page("pending", self.pending_page)
+        self._add_page("merge", self.merge_page)
+        self._add_page("workbook_fill", self.workbook_fill_page)
         self._add_page("history", self.history_page)
         self._add_page("statistics", self.statistics_page)
         self._add_page("templates", self.template_page)

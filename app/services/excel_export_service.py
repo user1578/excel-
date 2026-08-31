@@ -12,6 +12,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from app.services.statistics_service import AttendanceQuery, StatisticsService
+from app.utils.excel_safety import safe_excel_value
 
 
 class ExcelExportService:
@@ -64,7 +65,7 @@ class ExcelExportService:
             cell.font = self.HEADER_FONT
             cell.alignment = Alignment(horizontal="center", vertical="center")
         for row in rows:
-            sheet.append([row.get(key, "") if row.get(key) is not None else "" for _label, key in columns])
+            sheet.append([safe_excel_value(row.get(key, "") if row.get(key) is not None else "") for _label, key in columns])
         for cells in sheet.iter_rows(min_row=2):
             for cell in cells:
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
@@ -84,7 +85,7 @@ class ExcelExportService:
         names = {"task_id": "任务 ID", "start_date": "开始日期", "end_date": "结束日期", "class_name": "班级", "student_id": "学生 ID", "attendance_type": "考勤类型", "status": "考勤状态"}
         sheet.append(["导出时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
         for key, value in asdict(query).items():
-            sheet.append([names[key], value if value not in (None, "") else "全部"])
+            sheet.append([names[key], safe_excel_value(value if value not in (None, "") else "全部")])
         for cell in sheet[1]:
             cell.fill = self.HEADER_FILL
             cell.font = self.HEADER_FONT

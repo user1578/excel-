@@ -33,7 +33,7 @@ class AttendanceTransformer:
 
         status_value = self._clean(data.get("status"))
         if status_value:
-            for status in re.split(r"[、,，;；/\\n]+", status_value):
+            for status in re.split(r"[、,，;；/\r\n]+", status_value):
                 clean = status.strip()
                 if clean and clean.lower() not in self.NEGATIVE_VALUES:
                     entries.append(AttendanceEntry(clean, 1))
