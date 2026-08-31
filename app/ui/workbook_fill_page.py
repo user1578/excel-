@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from app.models.table_dataset import Provenance, TableDataset, TableRow
+from app.models.table_dataset import TableDataset, TableRow
 from app.parsers.workbook_template_analyzer import WorkbookTemplateAnalyzer
 from app.services.data_workspace_service import DataWorkspaceService
 from app.services.table_analysis_service import TableAnalysisService
@@ -96,13 +96,9 @@ class WorkbookFillPage(QWidget):
         choice = self.source_box.currentText()
         if choice == "当前资料汇总结果":
             result = self.workspace.current_merge_result
-            if result is None:
+            if result is None or self.workspace.current_dataset is None:
                 QMessageBox.information(self, "没有汇总结果", "请先在“资料汇总”完成一次汇总。"); return
-            rows = []
-            for index, record in enumerate(result.records, 2):
-                provenance = next(iter(record.provenance.values()), Provenance("当前汇总", "汇总结果", index))
-                rows.append(TableRow(dict(record.values), provenance))
-            self.dataset = TableDataset(result.columns, rows, "当前汇总", "汇总结果", 1, column_labels=result.column_labels)
+            self.dataset = self.workspace.current_dataset
         elif choice == "学生库":
             students = self.master.list_students()
             columns = ["name", "student_number", "class_name", "major", "grade", "phone", "dormitory", "remark"]

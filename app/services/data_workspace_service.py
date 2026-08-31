@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.models.merge_models import MergeResult
-from app.models.table_dataset import TableDataset
+from app.models.table_dataset import Provenance, TableDataset, TableRow
 
 
 class DataWorkspaceService:
@@ -13,4 +13,15 @@ class DataWorkspaceService:
 
     def set_merge_result(self, result: MergeResult) -> None:
         self.current_merge_result = result
-        self.current_dataset = None
+        rows = []
+        for index, record in enumerate(result.records, start=2):
+            provenance = next(iter(record.provenance.values()), Provenance("当前汇总", "汇总结果", index))
+            rows.append(TableRow(dict(record.values), provenance))
+        self.current_dataset = TableDataset(
+            result.columns,
+            rows,
+            "当前汇总",
+            "汇总结果",
+            1,
+            column_labels=dict(result.column_labels),
+        )
