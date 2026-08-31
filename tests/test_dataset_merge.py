@@ -9,6 +9,7 @@ from app.models.table_dataset import Provenance, TableDataset, TableRow
 from app.services.dataset_merge_service import DatasetMergeService
 from app.services.merge_export_service import MergeExportService
 from app.services.table_analysis_service import TableAnalysisService
+from app.services.data_workspace_service import DataWorkspaceService
 
 
 def dataset(name, columns, rows, labels=None, sheet="资料"):
@@ -116,3 +117,14 @@ def test_analysis_preserves_custom_fields_dates_multiple_sheets_and_nonfirst_hea
     assert base.rows[0].values["date"] == "2026-09-30"
     assert any(key.startswith("custom:") for key in base.columns)
     assert all_datasets[1].detected_header == 2
+
+
+def test_workspace_keeps_current_merge_result_and_fill_ready_dataset():
+    result = DatasetMergeService().merge_vertical([
+        dataset("来源.xlsx", ["name"], [{"name": "测试学生甲"}]),
+    ])
+    workspace = DataWorkspaceService()
+    workspace.set_merge_result(result)
+    assert workspace.current_merge_result is result
+    assert workspace.current_dataset is not None
+    assert workspace.current_dataset.rows[0].values["name"] == "测试学生甲"
