@@ -66,7 +66,7 @@ def test_all_navigation_pages_open_smoke(application, tmp_path):
     window.show()
 
     for page_key in (
-        "home", "tasks", "imports", "pending", "students", "classes", "dormitories",
+        "home", "tasks", "imports", "pending", "students", "classes", "dormitories", "merge", "workbook_fill",
         "statistics", "templates", "history", "settings",
     ):
         window.navigate(page_key)
