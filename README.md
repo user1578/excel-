@@ -42,6 +42,16 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Windows 一键启动
+
+普通使用时，双击项目根目录的 `启动Excel资料整理助手.bat` 即可启动。
+
+首次运行如果缺少依赖，可按窗口中的中文提示选择自动安装。开发者仍然可以使用：
+
+```bash
+python main.py
+```
+
 ## 基础使用流程
 
 1. 在“学生库”“班级库”“寝室库”维护基础资料。
