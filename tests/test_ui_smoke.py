@@ -14,7 +14,10 @@ from app.models.class_record import ClassRecord
 from app.models.dormitory import Dormitory
 from app.models.student import Student
 from app.models.task import Task
+from app.models.merge_models import ConflictResolution
+from app.models.table_dataset import Provenance, TableDataset, TableRow
 from app.repositories.database import DatabaseManager
+from app.services.dataset_merge_service import DatasetMergeService
 from app.services.master_data_service import MasterDataService
 from app.ui.main_window import MainWindow
 
@@ -74,4 +77,26 @@ def test_all_navigation_pages_open_smoke(application, tmp_path):
         assert window.content_stack.currentWidget() is not None
         assert window._nav_buttons[page_key].isChecked()
 
+    window.close()
+
+
+def test_conflict_resolution_refreshes_workspace_used_by_workbook_fill_page(application, tmp_path):
+    database = DatabaseManager(tmp_path / "workspace-smoke.db")
+    database.initialize()
+    window = MainWindow(MasterDataService(database))
+    first = TableDataset(["name", "student_number", "phone"], [
+        TableRow({"name": "测试学生甲", "student_number": "20260001", "phone": "13800000001"}, Provenance("A.xlsx", "资料", 2)),
+    ], "A.xlsx", "资料", 1, column_labels={"name": "姓名", "student_number": "学号", "phone": "电话"})
+    second = TableDataset(["name", "student_number", "phone"], [
+        TableRow({"name": "测试学生甲", "student_number": "20260001", "phone": "13900000001"}, Provenance("B.xlsx", "资料", 2)),
+    ], "B.xlsx", "资料", 1, column_labels={"name": "姓名", "student_number": "学号", "phone": "电话"})
+    result = DatasetMergeService().merge_by_student([first, second])
+    window.merge_page.result = result
+    window.merge_page.workspace.set_merge_result(result)
+    window.merge_page._render_result()
+    window.merge_page.conflicts.setCurrentCell(0, 0)
+    window.merge_page.resolve_selected(ConflictResolution.USE_B)
+    window.workbook_fill_page.choose_source()
+    assert window.data_workspace.current_dataset.rows[0].values["phone"] == "13900000001"
+    assert window.workbook_fill_page.dataset.rows[0].values["phone"] == "13900000001"
     window.close()

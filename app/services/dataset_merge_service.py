@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any
 
 from app.models.merge_models import ConflictResolution, MergeConflict, MergeMode, MergeResult, MergedRecord
-from app.models.table_dataset import TableDataset, TableRow
+from app.models.table_dataset import Provenance, TableDataset, TableRow
 from app.utils.value_normalizer import normalize_class_name, normalize_text
 
 
@@ -52,7 +52,14 @@ class DatasetMergeService:
         if resolution is ConflictResolution.MANUAL and manual_value is None:
             raise ValueError("手工解决冲突时必须提供值。")
         chosen = conflict.value_a if resolution is ConflictResolution.USE_A else conflict.value_b if resolution is ConflictResolution.USE_B else manual_value
-        result.records[conflict.record_index].values[conflict.field] = chosen
+        record = result.records[conflict.record_index]
+        record.values[conflict.field] = chosen
+        if resolution is ConflictResolution.USE_A:
+            record.provenance[conflict.field] = conflict.source_a
+        elif resolution is ConflictResolution.USE_B:
+            record.provenance[conflict.field] = conflict.source_b
+        else:
+            record.provenance[conflict.field] = Provenance("人工解决", "冲突处理", 0)
         conflict.resolution = resolution
         conflict.resolved_value = chosen
 
@@ -85,7 +92,8 @@ class DatasetMergeService:
         number = normalize_text(values.get("student_number"))
         if number:
             matches = [i for i, item in enumerate(records) if normalize_text(item.values.get("student_number")) == number]
-            return matches
+            if matches:
+                return matches
 
         name = normalize_text(values.get("name"))
         class_name = normalize_class_name(values.get("class_name"))
@@ -93,9 +101,14 @@ class DatasetMergeService:
             return []
         named = [i for i, item in enumerate(records) if normalize_text(item.values.get("name")) == name]
         if class_name:
-            return [i for i in named if normalize_class_name(records[i].values.get("class_name")) == class_name]
+            return [
+                i for i in named
+                if normalize_class_name(records[i].values.get("class_name")) == class_name
+                and (not number or not normalize_text(records[i].values.get("student_number")))
+            ]
         # 唯一姓名只在全量输入没有任何相互矛盾身份线索且候选唯一时才关联。
-        return named if len(named) == 1 and len(name_evidence[name]) == 1 else []
+        safe_named = [i for i in named if not number or not normalize_text(records[i].values.get("student_number"))]
+        return safe_named if len(safe_named) == 1 and len(name_evidence[name]) == 1 else []
 
     def _combine(self, result: MergeResult, record_index: int, incoming: TableRow) -> None:
         target = result.records[record_index]

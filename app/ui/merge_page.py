@@ -185,6 +185,7 @@ class MergePage(QWidget):
             manual_value, accepted = QInputDialog.getText(self, "手动解决", "请输入要保留的值：")
             if not accepted: return
         self.merge_service.resolve_conflict(self.result, conflict.id, resolution, manual_value)
+        self.workspace.set_merge_result(self.result)
         self._render_result()
 
     def export_result(self) -> None:

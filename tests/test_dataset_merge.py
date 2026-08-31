@@ -73,10 +73,16 @@ def test_conflicts_never_silently_overwrite_and_can_be_resolved():
     conflict = next(item for item in result.conflicts if item.field == "phone")
     assert result.records[0].values["phone"] == "13800000001"
     assert not conflict.is_resolved
+    service.resolve_conflict(result, conflict.id, ConflictResolution.USE_A)
+    assert result.records[0].provenance["phone"] == conflict.source_a
     service.resolve_conflict(result, conflict.id, ConflictResolution.USE_B)
     assert result.records[0].values["phone"] == "13900000001"
+    assert result.records[0].provenance["phone"] == conflict.source_b
     service.resolve_conflict(result, conflict.id, ConflictResolution.MANUAL, "13700000001")
     assert result.records[0].values["phone"] == "13700000001"
+    assert result.records[0].provenance["phone"].source_file == "人工解决"
+    assert result.records[0].provenance["phone"].source_sheet == "冲突处理"
+    assert result.records[0].provenance["phone"].source_row == 0
 
 
 def test_export_requires_explicit_permission_for_unresolved_conflicts_and_escapes_user_text(tmp_path):
@@ -128,3 +134,38 @@ def test_workspace_keeps_current_merge_result_and_fill_ready_dataset():
     assert workspace.current_merge_result is result
     assert workspace.current_dataset is not None
     assert workspace.current_dataset.rows[0].values["name"] == "测试学生甲"
+
+
+def test_workspace_snapshot_is_refreshed_after_conflict_resolution():
+    merge = DatasetMergeService()
+    result = merge.merge_by_student([
+        dataset("A.xlsx", ["name", "student_number", "phone"], [{"name": "测试学生甲", "student_number": "20260001", "phone": "13800000001"}]),
+        dataset("B.xlsx", ["name", "student_number", "phone"], [{"name": "测试学生甲", "student_number": "20260001", "phone": "13900000001"}]),
+    ])
+    workspace = DataWorkspaceService()
+    workspace.set_merge_result(result)
+    conflict = next(item for item in result.conflicts if item.field == "phone")
+    merge.resolve_conflict(result, conflict.id, ConflictResolution.USE_B)
+    workspace.set_merge_result(result)
+    assert workspace.current_dataset.rows[0].values["phone"] == "13900000001"
+    merge.resolve_conflict(result, conflict.id, ConflictResolution.MANUAL, "13700000001")
+    workspace.set_merge_result(result)
+    assert workspace.current_dataset.rows[0].values["phone"] == "13700000001"
+
+
+def test_number_miss_falls_back_only_to_empty_number_same_name_and_class_in_both_orders():
+    service = DatasetMergeService()
+    empty = dataset("空学号.xlsx", ["name", "student_number", "class_name"], [{"name": "测试学生甲", "student_number": "", "class_name": "测试班2401"}])
+    numbered = dataset("有学号.xlsx", ["name", "student_number", "class_name"], [{"name": "测试学生甲", "student_number": "20260001", "class_name": "测试班2401"}])
+    forward = service.merge_by_student([empty, numbered])
+    reverse = service.merge_by_student([numbered, empty])
+    assert len(forward.records) == len(reverse.records) == 1
+    assert forward.records[0].values["student_number"] == reverse.records[0].values["student_number"] == "20260001"
+
+
+def test_number_miss_never_merges_with_a_different_nonempty_number():
+    result = DatasetMergeService().merge_by_student([
+        dataset("旧学号.xlsx", ["name", "student_number", "class_name"], [{"name": "测试学生甲", "student_number": "20260002", "class_name": "测试班2401"}]),
+        dataset("新学号.xlsx", ["name", "student_number", "class_name"], [{"name": "测试学生甲", "student_number": "20260001", "class_name": "测试班2401"}]),
+    ])
+    assert len(result.records) == 2
