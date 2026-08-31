@@ -21,6 +21,7 @@ from app.repositories.task_repository import TaskRepository
 from app.services.attendance_transformer import AttendanceEntry, AttendanceTransformer
 from app.services.master_data_service import MasterDataService
 from app.services.student_match_service import StudentMatchService
+from app.utils.value_normalizer import normalize_date, normalize_text
 
 
 CORE = {StandardField.NAME, StandardField.STUDENT_NUMBER, StandardField.CLASS_NAME, StandardField.DATE, StandardField.COURSE}
@@ -90,7 +91,7 @@ class ImportService:
                     continue
                 value = row[i]
                 if value is not None and str(value) != "nan":
-                    normalized[field.value] = str(value).strip()
+                    normalized[field.value] = normalize_date(value) if field is StandardField.DATE else normalize_text(value)
                     sources[field.value] = "原始数据"
             record = ParsedRecord(session.header_row + offset + 2, raw, normalized, sources, source_file=session.file_path.name, sheet_name=session.sheet_name)
             self.matcher.match(record)
@@ -179,7 +180,13 @@ class ImportService:
     def list_logs(self, task_id: int | None = None):
         return self.repository.list_logs(task_id)
 
-    def resolve_and_import(self, pending_id: int, student_id: int | None = None, resolution_note: str = "人工确认后导入") -> int:
+    def resolve_and_import(
+        self,
+        pending_id: int,
+        student_id: int | None = None,
+        resolution_note: str = "人工确认后导入",
+        confirm_possible_duplicate: bool = False,
+    ) -> int | None:
         """人工确认单条待处理状态后写入正式考勤记录，并标记该待确认项已解决。"""
         with self.database.transaction() as connection:
             pending = self.repository.get_pending(pending_id, connection)
@@ -198,8 +205,20 @@ class ImportService:
                 student_id = None
             entry = AttendanceEntry(**entry_data)
             record = ParsedRecord(int(pending["source_row_number"]), json.loads(pending["raw_data"]), data, student_id=student_id)
-            attendance_id = self.repository.create_attendance(connection, self._attendance_values(int(pending["task_id"]), int(pending["source_file_id"]), record, entry))
-            self.repository.resolve_pending(connection, pending_id, {"note": resolution_note, "student_id": student_id, "attendance_record_id": attendance_id})
+            values = self._attendance_values(int(pending["task_id"]), int(pending["source_file_id"]), record, entry)
+            duplicate_kind = self.repository.find_record_duplicate(connection, values)
+            if duplicate_kind == "EXACT_DUPLICATE":
+                self.repository.resolve_pending(connection, pending_id, {
+                    "action": "skipped_exact_duplicate", "note": resolution_note, "student_id": student_id,
+                })
+                return None
+            if duplicate_kind == "POSSIBLE_DUPLICATE" and not confirm_possible_duplicate:
+                raise PendingResolutionError("重新查重发现可能重复记录，请进行二次明确确认后再导入。")
+            attendance_id = self.repository.create_attendance(connection, values)
+            self.repository.resolve_pending(connection, pending_id, {
+                "action": "imported_after_possible_duplicate_confirmation" if duplicate_kind else "imported",
+                "note": resolution_note, "student_id": student_id, "attendance_record_id": attendance_id,
+            })
             return attendance_id
 
     @staticmethod
