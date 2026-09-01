@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app.models.class_record import ClassRecord
@@ -16,6 +16,8 @@ from app.services.class_export_service import (
 )
 from app.services.data_workspace_service import DataWorkspaceService
 from app.services.master_data_service import MasterDataService
+from app.template_engine.styles import standard_office_style
+from app.ui.dialogs.style_dialog import StyleDialog
 
 
 class ClassStudentsDialog(QDialog):
@@ -108,6 +110,7 @@ class ClassExportDialog(QDialog):
         super().__init__(parent)
         self.service, self.class_name, self.students = service, class_name, students
         self.exporter = ClassExportService(service)
+        self.style = standard_office_style()
         self.setWindowTitle("生成班级表格")
         self.resize(860, 520)
         layout = QVBoxLayout(self)
@@ -115,8 +118,8 @@ class ClassExportDialog(QDialog):
         self.title_input = QLineEdit(); self.title_input.setPlaceholderText("可选：表格主标题")
         title_bar.addWidget(QLabel("主标题")); title_bar.addWidget(self.title_input, 1)
         layout.addLayout(title_bar)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["显示标题", "数据来源", "来源字段", "固定值", "操作"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["显示标题", "数据来源", "来源字段", "固定值", "列宽", "操作"])
         layout.addWidget(self.table, 1)
         controls = QHBoxLayout()
         add = QPushButton("添加列"); add.clicked.connect(self.add_column)
@@ -124,7 +127,8 @@ class ClassExportDialog(QDialog):
         load = QPushButton("加载方案"); load.clicked.connect(self.load_scheme)
         delete = QPushButton("删除方案"); delete.clicked.connect(self.delete_scheme)
         generate = QPushButton("生成 Excel"); generate.clicked.connect(self.generate)
-        for widget in (add, save, load, delete, generate): controls.addWidget(widget)
+        style = QPushButton("表格样式"); style.clicked.connect(self.edit_style)
+        for widget in (add, save, load, delete, style, generate): controls.addWidget(widget)
         controls.addStretch(); layout.addLayout(controls)
         for column in [ExportColumn("序号", SOURCE_AUTO), ExportColumn("姓名", SOURCE_CORE, "name"), ExportColumn("学号", SOURCE_CORE, "student_number"), ExportColumn("联系电话", SOURCE_CORE, "phone"), ExportColumn("参赛", SOURCE_BLANK), ExportColumn("备注", SOURCE_BLANK)]:
             self.add_column(column)
@@ -151,13 +155,15 @@ class ClassExportDialog(QDialog):
         field.setCurrentIndex(max(0, field.findData(definition.source_field)))
         self.table.setCellWidget(row, 2, field)
         self.table.setItem(row, 3, QTableWidgetItem(definition.fixed_value))
+        width = QDoubleSpinBox(); width.setRange(0, 80); width.setValue(definition.column_width or 0); width.setSpecialValueText("自动")
+        self.table.setCellWidget(row, 4, width)
         actions = QWidget(); bar = QHBoxLayout(actions); bar.setContentsMargins(2, 1, 2, 1)
         up, down, remove = QPushButton("↑"), QPushButton("↓"), QPushButton("删除")
         up.clicked.connect(lambda _checked=False, widget=actions: self._move_action_row(widget, -1))
         down.clicked.connect(lambda _checked=False, widget=actions: self._move_action_row(widget, 1))
         remove.clicked.connect(lambda _checked=False, widget=actions: self._remove_action_row(widget))
         for button in (up, down, remove): bar.addWidget(button)
-        self.table.setCellWidget(row, 4, actions)
+        self.table.setCellWidget(row, 5, actions)
 
     def move_row(self, row: int, delta: int) -> None:
         target = row + delta
@@ -168,7 +174,7 @@ class ClassExportDialog(QDialog):
 
     def _action_row(self, actions: QWidget) -> int:
         for row in range(self.table.rowCount()):
-            if self.table.cellWidget(row, 4) is actions:
+            if self.table.cellWidget(row, 5) is actions:
                 return row
         return -1
 
@@ -185,7 +191,7 @@ class ClassExportDialog(QDialog):
     def columns(self) -> list[ExportColumn]:
         result: list[ExportColumn] = []
         for row in range(self.table.rowCount()):
-            result.append(ExportColumn(self.table.item(row, 0).text().strip(), self.table.cellWidget(row, 1).currentData(), self.table.cellWidget(row, 2).currentData() or "", self.table.item(row, 3).text()))
+            result.append(ExportColumn(self.table.item(row, 0).text().strip(), self.table.cellWidget(row, 1).currentData(), self.table.cellWidget(row, 2).currentData() or "", self.table.item(row, 3).text(), self.table.cellWidget(row, 4).value() or None))
         return [item for item in result if item.title]
 
     def save_scheme(self) -> None:
@@ -212,9 +218,14 @@ class ClassExportDialog(QDialog):
         if accepted:
             self.exporter.delete_scheme(next(item.id for item in schemes if item.name == name))
 
+    def edit_style(self) -> None:
+        dialog = StyleDialog(self.style, self)
+        if dialog.exec():
+            self.style = dialog.result_style()
+
     def generate(self) -> None:
         try:
-            output = self.exporter.export(self.class_name, self.students, self.columns(), self.title_input.text())
+            output = self.exporter.export(self.class_name, self.students, self.columns(), self.title_input.text(), self.style)
         except ValueError as error:
             QMessageBox.warning(self, "无法生成", str(error)); return
         QMessageBox.information(self, "生成完成", f"已另存到：\n{output}")

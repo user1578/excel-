@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.models.field_mapping import FIELD_LABELS, StandardField
+from app.template_engine.styles import WorkbookStyleSchema, standard_office_style
 
 
 FIELD_TYPES = ("text", "integer", "decimal", "date", "percentage", "select", "name", "student_number", "class_name", "dormitory", "formula")
@@ -36,6 +37,7 @@ class FieldSchema:
     description: str | None = None
     standard_field: str | None = None
     allow_blank: bool = True
+    column_width: float | None = None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "FieldSchema":
@@ -45,6 +47,7 @@ class FieldSchema:
             options=[str(item) for item in (value.get("options") or []) if str(item).strip()], data_source=value.get("data_source"),
             formula=value.get("formula"), description=value.get("description"), standard_field=value.get("standard_field"),
             allow_blank=bool(value.get("allow_blank", True)),
+            column_width=float(value["column_width"]) if value.get("column_width") not in (None, "") else None,
         )
 
 
@@ -65,6 +68,7 @@ class TemplateSchema:
     description: str | None = None
     default_rows: int = 100
     sheets: list[SheetSchema] = field(default_factory=list)
+    style: WorkbookStyleSchema = field(default_factory=standard_office_style)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "TemplateSchema":
@@ -72,6 +76,7 @@ class TemplateSchema:
             template_name=str(value.get("template_name", "")).strip(), student_related=bool(value.get("student_related", False)),
             description=value.get("description"), default_rows=int(value.get("default_rows") or 100),
             sheets=[SheetSchema.from_dict(item) for item in (value.get("sheets") or [])],
+            style=WorkbookStyleSchema.from_dict(value.get("style")),
         )
 
     @classmethod
@@ -99,6 +104,10 @@ class TemplateSchema:
             raise SchemaValidationError("预生成空白行数必须在 1 到 10000 之间。")
         if not self.sheets:
             raise SchemaValidationError("模板至少需要一个工作表。")
+        try:
+            self.style.validate()
+        except ValueError as error:
+            raise SchemaValidationError(str(error)) from error
         sheet_names: set[str] = set()
         for sheet in self.sheets:
             if not sheet.name or len(sheet.name) > 31 or INVALID_SHEET_CHARACTERS.search(sheet.name):
@@ -129,6 +138,8 @@ class TemplateSchema:
                 raise SchemaValidationError(f"字段“{field_schema.name}”下拉选项不能包含 Excel 公式。")
             if field_schema.field_type not in FIELD_TYPES:
                 raise SchemaValidationError(f"字段“{field_schema.name}”类型不支持。")
+            if field_schema.column_width is not None and not 5 <= field_schema.column_width <= 80:
+                raise SchemaValidationError(f"字段“{field_schema.name}”列宽必须在 5 到 80 之间。")
             if field_schema.standard_field:
                 try:
                     StandardField(field_schema.standard_field)
@@ -166,7 +177,7 @@ class TemplateSchema:
         core_fields = [existing.get(standard, core_field_schema(standard)) for standard in CORE_STANDARD_FIELDS]
         remaining = [field for field in primary.fields if field.standard_field not in CORE_STANDARD_FIELDS]
         updated = SheetSchema(primary.name, core_fields + remaining)
-        return TemplateSchema(self.template_name, self.student_related, self.description, self.default_rows, [updated, *self.sheets[1:]])
+        return TemplateSchema(self.template_name, self.student_related, self.description, self.default_rows, [updated, *self.sheets[1:]], self.style)
 
 
 def core_field_schema(standard_field: str) -> FieldSchema:
