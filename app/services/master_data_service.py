@@ -12,6 +12,7 @@ from app.repositories.class_repository import ClassRepository
 from app.repositories.database import DatabaseManager
 from app.repositories.dormitory_repository import DormitoryRepository
 from app.repositories.student_repository import StudentRepository
+from app.utils.value_normalizer import normalize_column_name
 
 
 class DuplicateStudentNumberError(ValueError):
@@ -88,6 +89,22 @@ class MasterDataService:
 
     def list_students(self) -> list[Student]:
         return self.students.list_all()
+
+    def list_students_by_class(self, class_name: str) -> list[Student]:
+        standard_name = self.resolve_class_name(class_name) or class_name.strip()
+        return self.students.list_by_class(standard_name)
+
+    def get_student_extra_fields(self, student_id: int) -> dict[str, dict[str, str]]:
+        return self.students.get_extra_fields(student_id)
+
+    def set_student_extra_field(self, student_id: int, field_name: str, field_value: str) -> None:
+        field_key = normalize_column_name(field_name)
+        if not field_key:
+            raise ValueError("扩展字段名称不能为空")
+        self.students.set_extra_field(student_id, field_name, field_key, field_value)
+
+    def delete_student_extra_field(self, student_id: int, field_key: str) -> bool:
+        return self.students.delete_extra_field(student_id, field_key)
 
     def search_students(self, keyword: str) -> list[Student]:
         return self.students.search(keyword) if keyword.strip() else self.list_students()

@@ -5,8 +5,12 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QLabel,
     QLineEdit,
     QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -53,6 +57,20 @@ class StudentDialog(QDialog):
         form.addRow("备注", self.remark_input)
         layout.addLayout(form)
 
+        layout.addWidget(QLabel("扩展资料（仅保存在本机数据库）"))
+        self.extra_table = QTableWidget(0, 2)
+        self.extra_table.setHorizontalHeaderLabels(["字段", "值"])
+        self.extra_table.setMinimumHeight(130)
+        layout.addWidget(self.extra_table)
+        extra_controls = QHBoxLayout()
+        add_extra = QPushButton("新增字段")
+        remove_extra = QPushButton("删除字段")
+        add_extra.clicked.connect(self.add_extra_field)
+        remove_extra.clicked.connect(self.remove_extra_field)
+        extra_controls.addWidget(add_extra); extra_controls.addWidget(remove_extra); extra_controls.addStretch()
+        layout.addLayout(extra_controls)
+        self._deleted_extra_keys: list[str] = []
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -72,6 +90,41 @@ class StudentDialog(QDialog):
         self.phone_input.setText(student.phone or "")
         self.dormitory_input.setCurrentText(student.dormitory or "")
         self.remark_input.setPlainText(student.remark or "")
+        if student.id:
+            for field_key, item in self.service.get_student_extra_fields(student.id).items():
+                self._add_extra_row(item["name"], item["value"], field_key)
+
+    def _add_extra_row(self, name: str = "", value: str = "", field_key: str = "") -> None:
+        row = self.extra_table.rowCount()
+        self.extra_table.insertRow(row)
+        name_item = QTableWidgetItem(name)
+        name_item.setData(256, field_key)
+        self.extra_table.setItem(row, 0, name_item)
+        self.extra_table.setItem(row, 1, QTableWidgetItem(value))
+
+    def add_extra_field(self) -> None:
+        self._add_extra_row()
+
+    def remove_extra_field(self) -> None:
+        row = self.extra_table.currentRow()
+        if row < 0:
+            return
+        key = self.extra_table.item(row, 0).data(256)
+        if key:
+            self._deleted_extra_keys.append(str(key))
+        self.extra_table.removeRow(row)
+
+    def extra_fields(self) -> list[tuple[str, str]]:
+        values: list[tuple[str, str]] = []
+        for row in range(self.extra_table.rowCount()):
+            name = self.extra_table.item(row, 0).text().strip()
+            value = self.extra_table.item(row, 1).text()
+            if name:
+                values.append((name, value))
+        return values
+
+    def deleted_extra_keys(self) -> list[str]:
+        return list(self._deleted_extra_keys)
 
     def accept(self) -> None:
         if not self.name_input.text().strip() or not self.number_input.text().strip() or not self.class_input.currentText().strip():
