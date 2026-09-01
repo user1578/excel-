@@ -20,6 +20,7 @@ from app.repositories.database import DatabaseManager
 from app.services.dataset_merge_service import DatasetMergeService
 from app.services.master_data_service import MasterDataService
 from app.ui.main_window import MainWindow
+from app.ui.dialogs.class_students_dialog import ClassExportDialog, ClassStudentsDialog
 
 
 @pytest.fixture(scope="session")
@@ -100,3 +101,17 @@ def test_conflict_resolution_refreshes_workspace_used_by_workbook_fill_page(appl
     assert window.data_workspace.current_dataset.rows[0].values["phone"] == "13900000001"
     assert window.workbook_fill_page.dataset.rows[0].values["phone"] == "13900000001"
     window.close()
+
+
+def test_v21_student_and_class_export_dialogs_smoke(application, tmp_path):
+    database = DatabaseManager(tmp_path / "v21-dialogs.db")
+    database.initialize()
+    service = MasterDataService(database)
+    class_record = service.create_class(ClassRecord("测试班2401"))
+    student = service.create_student(Student("测试学生甲", "20260001", "测试班2401"))
+    service.set_student_extra_field(student.id, "性别", "测试性别")
+    students_dialog = ClassStudentsDialog(service, class_record)
+    export_dialog = ClassExportDialog(service, class_record.standard_name, [student])
+    assert students_dialog.table.rowCount() == 1
+    assert export_dialog.table.rowCount() >= 1
+    students_dialog.close(); export_dialog.close()
