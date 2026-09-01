@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import copy
 from dataclasses import dataclass
 import re
+import unicodedata
 
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -13,6 +14,7 @@ from app.utils.excel_safety import safe_excel_value
 
 STYLE_PRESETS = ("标准办公表格", "商务蓝色", "极简表格", "自定义")
 TITLE_MODES = ("ask", "none", "template_name", "custom")
+FREEZE_MODES = ("none", "header", "ask")
 COLOR = re.compile(r"^[0-9A-Fa-f]{6}$")
 
 
@@ -48,12 +50,21 @@ class WorkbookStyleSchema:
     border_color: str = "000000"
     border_style: str = "thin"
     show_gridlines: bool = True
-    freeze_header: bool = True
+    freeze_mode: str = "none"
+    freeze_header: bool = False
     auto_filter: bool = False
+    auto_fit: bool = True
     default_column_width: float | None = None
     required_display: str = "none"
     required_header_color: str = "C00000"
     required_cell_fill_color: str = "FFF2CC"
+
+    def __post_init__(self) -> None:
+        """兼容 V2.2 及更早版本仅保存 freeze_header 的样式配置。"""
+        if self.freeze_header and self.freeze_mode == "none":
+            object.__setattr__(self, "freeze_mode", "header")
+        elif self.freeze_mode == "header" and not self.freeze_header:
+            object.__setattr__(self, "freeze_header", True)
 
     @classmethod
     def from_dict(cls, value: dict | None) -> "WorkbookStyleSchema":
@@ -62,6 +73,8 @@ class WorkbookStyleSchema:
         allowed = {key: item for key, item in value.items() if key in cls.__dataclass_fields__}
         if "title_mode" not in allowed:
             allowed["title_mode"] = "custom" if allowed.get("show_main_title") and allowed.get("main_title") else "template_name" if allowed.get("show_main_title") else "none"
+        if "freeze_mode" not in allowed:
+            allowed["freeze_mode"] = "header" if allowed.get("freeze_header") else "none"
         return cls(**allowed)
 
     def validate(self) -> None:
@@ -69,6 +82,8 @@ class WorkbookStyleSchema:
             raise ValueError("样式预设不支持。")
         if self.title_mode not in TITLE_MODES:
             raise ValueError("大标题模式不支持。")
+        if self.freeze_mode not in FREEZE_MODES:
+            raise ValueError("冻结窗格模式不支持。")
         for name, size in (("整体字号", self.overall_font_size), ("标题字号", self.title_font_size), ("表头字号", self.header_font_size), ("数据字号", self.body_font_size)):
             if not 6 <= size <= 72:
                 raise ValueError(f"{name}必须在 6 到 72 之间。")
@@ -87,14 +102,14 @@ class WorkbookStyleSchema:
 
 
 def standard_office_style() -> WorkbookStyleSchema:
-    return WorkbookStyleSchema(show_gridlines=True, auto_filter=False, body_horizontal_alignment="center", body_vertical_alignment="center")
+    return WorkbookStyleSchema(show_gridlines=True, freeze_mode="none", freeze_header=False, auto_filter=False, auto_fit=True, body_horizontal_alignment="center", body_vertical_alignment="center")
 
 
 def business_blue_style() -> WorkbookStyleSchema:
     return WorkbookStyleSchema(
         preset="商务蓝色", header_fill_enabled=True, header_fill_color="1F4E78", header_font_color="FFFFFF",
         border_color="D9E2F3", required_display="cell_fill", body_horizontal_alignment="left", body_vertical_alignment="top",
-        show_gridlines=False, auto_filter=True,
+        show_gridlines=False, freeze_mode="header", freeze_header=True, auto_filter=True, auto_fit=True,
     )
 
 
@@ -157,6 +172,54 @@ class ExcelStyleRenderer:
         width = explicit or self.style.default_column_width or self._suggested_column_width(label) or min(max(len(label) + 4, 12), 35)
         sheet.column_dimensions[get_column_letter(index)].width = width
 
+    def size_table(self, sheet, header_row: int, data_start: int, data_end: int, labels: list[str], explicit_widths: list[float | None]) -> None:
+        """只为新生成的有效表格区域估算宽度和行高。"""
+        widths: list[float] = []
+        for index, label in enumerate(labels, 1):
+            explicit = explicit_widths[index - 1]
+            if explicit is not None:
+                width = explicit
+            elif self.style.auto_fit:
+                content_width = self._content_width(sheet, index, header_row, data_start, data_end, label)
+                semantic_width = self._suggested_column_width(label) or 0
+                width = min(max(8, content_width, semantic_width), 35)
+            else:
+                width = self.style.default_column_width or self._suggested_column_width(label) or min(max(self._display_width(label) + 3, 8), 35)
+            sheet.column_dimensions[get_column_letter(index)].width = width
+            widths.append(width)
+        self._fit_row_heights(sheet, header_row, data_start, data_end, labels, widths)
+
+    @staticmethod
+    def _display_width(value) -> int:
+        return sum(2 if unicodedata.east_asian_width(character) in {"F", "W", "A"} else 1 for character in str(value or ""))
+
+    def _content_width(self, sheet, column: int, header_row: int, data_start: int, data_end: int, label: str) -> float:
+        maximum = self._display_width(label)
+        for row in range(data_start, data_end + 1):
+            cell = sheet.cell(row, column)
+            if cell.value not in (None, "") and cell.data_type != "f":
+                maximum = max(maximum, self._display_width(cell.value))
+        return min(max(8, maximum + 3), 35)
+
+    def _fit_row_heights(self, sheet, header_row: int, data_start: int, data_end: int, labels: list[str], widths: list[float]) -> None:
+        if not self.style.auto_fit:
+            for row in range(data_start, data_end + 1):
+                sheet.row_dimensions[row].height = self.style.body_row_height
+            return
+        if self.style.auto_fit and self.style.header_wrap_text:
+            lines = max((self._wrapped_lines(label, width) for label, width in zip(labels, widths)), default=1)
+            sheet.row_dimensions[header_row].height = max(self.style.header_row_height, self.style.header_row_height * min(lines, 3))
+        for row in range(data_start, data_end + 1):
+            lines = 1
+            for column, width in enumerate(widths, 1):
+                cell = sheet.cell(row, column)
+                if cell.value not in (None, "") and cell.data_type != "f" and cell.alignment.wrap_text:
+                    lines = max(lines, self._wrapped_lines(cell.value, width))
+            sheet.row_dimensions[row].height = self.style.body_row_height * min(lines, 6)
+
+    def _wrapped_lines(self, value, width: float) -> int:
+        return max(1, -(-self._display_width(value) // max(1, int(width - 1))))
+
     def _suggested_column_width(self, label: str) -> float | None:
         if self.style.preset != "标准办公表格":
             return None
@@ -173,8 +236,10 @@ class ExcelStyleRenderer:
         return None
 
     def configure_table(self, sheet, header_row: int, end_row: int, column_count: int) -> None:
-        if self.style.freeze_header:
+        if self.style.freeze_mode == "header":
             sheet.freeze_panes = f"A{header_row + 1}"
+        else:
+            sheet.freeze_panes = None
         if self.style.auto_filter:
             sheet.auto_filter.ref = f"A{header_row}:{get_column_letter(column_count)}{max(header_row, end_row)}"
 

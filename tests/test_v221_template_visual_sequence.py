@@ -70,9 +70,9 @@ def test_title_modes_keep_real_header_rows_and_legacy_schema_compatibility(tmp_p
     custom_sheet = load_workbook(service.create(custom).workbook_path)["录入"]
     plain_sheet = load_workbook(service.create(plain).workbook_path)["录入"]
     legacy = WorkbookStyleSchema.from_dict({"show_main_title": True, "main_title": "旧标题"})
-    assert (title_sheet["A1"].value, title_sheet["A2"].value, title_sheet.freeze_panes) == ("物联网工程班学生名单", "姓名", "A3")
+    assert (title_sheet["A1"].value, title_sheet["A2"].value, title_sheet.freeze_panes) == ("物联网工程班学生名单", "姓名", None)
     assert custom_sheet.auto_filter.ref == "A2:B3" and custom_sheet["A1"].value == "自定义登记表"
-    assert (plain_sheet["A1"].value, plain_sheet.freeze_panes, legacy.title_mode) == ("姓名", "A2", "custom")
+    assert (plain_sheet["A1"].value, plain_sheet.freeze_panes, legacy.title_mode) == ("姓名", None, "custom")
 
 
 def test_sequence_detection_modes_and_preserves_template_style(tmp_path):

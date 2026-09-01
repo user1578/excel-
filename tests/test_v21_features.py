@@ -145,7 +145,7 @@ def test_class_export_without_title_unique_paths_and_safe_values(tmp_path):
     first = exporter.export("测试班2401", students, columns)
     second = exporter.export("测试班2401", students, columns)
     sheet = load_workbook(first)["学生名单"]
-    assert first != second and sheet["A1"].value == "姓名" and sheet["B2"].value == "'=不执行" and sheet.freeze_panes == "A2"
+    assert first != second and sheet["A1"].value == "姓名" and sheet["B2"].value == "'=不执行" and sheet.freeze_panes is None
 
 
 def test_unmatched_and_unresolved_records_are_both_counted_once():

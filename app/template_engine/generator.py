@@ -74,11 +74,9 @@ class TemplateGenerator:
                 validation = DataValidation(type="list", formula1=formula, allow_blank=field.allow_blank)
                 sheet.add_data_validation(validation)
                 validation.add(f"{get_column_letter(index)}{data_start}:{get_column_letter(index)}{data_start + rows - 1}")
-            renderer.set_column_width(sheet, index, field.name, field.column_width)
             if field.required:
                 renderer.mark_required(sheet.cell(header_row, index), (sheet.cell(row, index) for row in range(data_start, data_start + rows)))
-        for row in range(data_start, data_start + rows):
-            sheet.row_dimensions[row].height = renderer.style.body_row_height
+        renderer.size_table(sheet, header_row, data_start, data_start + rows - 1, labels, [field.column_width for field in fields])
         renderer.configure_table(sheet, header_row, data_start + rows - 1, len(fields))
 
     @staticmethod
