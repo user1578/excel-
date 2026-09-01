@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton, QSpinBox,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton, QSpinBox,
     QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -13,7 +13,7 @@ from app.models.table_dataset import Provenance, TableDataset, TableRow
 from app.parsers.workbook_template_analyzer import WorkbookTemplateAnalyzer
 from app.services.data_workspace_service import DataWorkspaceService
 from app.services.table_analysis_service import TableAnalysisService
-from app.services.workbook_fill_service import KEEP_EXISTING, SKIP_CONFLICTING_ROW, USE_NEW_VALUE, WorkbookFillService
+from app.services.workbook_fill_service import AUTO_SEQUENCE, KEEP_EXISTING, SEQUENCE_FILL_BLANK, SEQUENCE_NONE, SEQUENCE_RENUMBER, SKIP_CONFLICTING_ROW, USE_NEW_VALUE, WorkbookFillService
 from app.services.class_export_service import ClassExportService
 from app.services.legacy_excel_converter import LegacyExcelConversionError, LegacyExcelConverter
 from app.services.text_dataset_service import TextDatasetParseError, TextDatasetService
@@ -62,6 +62,15 @@ class WorkbookFillPage(QWidget):
         self.mapping_table = QTableWidget(0, 2)
         self.mapping_table.setHorizontalHeaderLabels(["模板字段", "数据源字段"])
         layout.addWidget(self.mapping_table, 1)
+        self.sequence_bar = QHBoxLayout()
+        self.sequence_notice = QLabel("")
+        self.sequence_enabled = QCheckBox("自动补齐序号")
+        self.sequence_start = QSpinBox(); self.sequence_start.setRange(1, 999999); self.sequence_start.setValue(1)
+        self.sequence_mode = QComboBox(); self.sequence_mode.addItem("仅补空白", SEQUENCE_FILL_BLANK); self.sequence_mode.addItem("重新连续编号", SEQUENCE_RENUMBER); self.sequence_mode.addItem("不处理", SEQUENCE_NONE)
+        self.sequence_enabled.toggled.connect(self._toggle_detected_sequence)
+        self.sequence_mode.currentIndexChanged.connect(lambda _index: self._update_sequence_state())
+        self.sequence_bar.addWidget(self.sequence_notice); self.sequence_bar.addWidget(self.sequence_enabled); self.sequence_bar.addWidget(QLabel("起始序号")); self.sequence_bar.addWidget(self.sequence_start); self.sequence_bar.addWidget(QLabel("处理方式")); self.sequence_bar.addWidget(self.sequence_mode); self.sequence_bar.addStretch()
+        layout.addLayout(self.sequence_bar)
         controls = QHBoxLayout()
         self.strategy_box = QComboBox()
         self.strategy_box.addItem("保留模板已有值", KEEP_EXISTING)
@@ -94,6 +103,7 @@ class WorkbookFillPage(QWidget):
         self.template_label.setText(original.name + ("（已安全转换为临时 .xlsx 副本）" if working_copy != original else ""))
         self.sheet_box.clear(); self.sheet_box.addItems(sheets)
         self.analysis = None
+        self._update_sequence_state()
 
     def analyze_template(self) -> None:
         if self.template_path is None or not self.sheet_box.currentText():
@@ -102,7 +112,8 @@ class WorkbookFillPage(QWidget):
             self.analysis = self.template_analyzer.analyze(self.template_path, self.sheet_box.currentText(), self.header_spin.value() or None)
         except ValueError as error:
             QMessageBox.warning(self, "模板分析失败", str(error)); return
-        self.message.setText(f"模板已分析：{len(self.analysis.target_columns)} 个可映射字段。")
+        explicit = self._detected_sequence_target()
+        self.message.setText(f"模板已分析：{len(self.analysis.target_columns)} 个可映射字段。" + (f" 检测到模板包含“{explicit}”列。" if explicit else ""))
         self._refresh_mapping_table()
 
     def choose_source(self) -> None:
@@ -157,11 +168,14 @@ class WorkbookFillPage(QWidget):
             self.mapping_table.insertRow(row)
             self.mapping_table.setItem(row, 0, QTableWidgetItem(target))
             box = QComboBox(); box.addItem("不填充", None)
+            box.addItem("自动序号", AUTO_SEQUENCE)
             for key in self.dataset.columns:
                 box.addItem(self.dataset.display_label(key), key)
             if target in defaults:
                 box.setCurrentIndex(box.findData(defaults[target]))
+            box.currentIndexChanged.connect(lambda _index: self._update_sequence_state())
             self.mapping_table.setCellWidget(row, 1, box)
+        self._update_sequence_state()
 
     def _mappings(self) -> dict[str, str]:
         result: dict[str, str] = {}
@@ -171,21 +185,50 @@ class WorkbookFillPage(QWidget):
             if key is not None: result[target] = key
         return result
 
+    def _detected_sequence_target(self) -> str | None:
+        if self.analysis is None:
+            return None
+        return next((target for target in self.analysis.target_columns if target in {"序号", "序", "编号"}), None)
+
+    def _toggle_detected_sequence(self, enabled: bool) -> None:
+        target = self._detected_sequence_target()
+        if target is None:
+            return
+        for row in range(self.mapping_table.rowCount()):
+            if self.mapping_table.item(row, 0).text() == target:
+                box = self.mapping_table.cellWidget(row, 1)
+                box.setCurrentIndex(box.findData(AUTO_SEQUENCE if enabled else None))
+                break
+
+    def _update_sequence_state(self) -> None:
+        mappings = self._mappings() if self.mapping_table.rowCount() else {}
+        target = next((name for name, source in mappings.items() if source == AUTO_SEQUENCE), None)
+        detected = self._detected_sequence_target()
+        self.sequence_notice.setText(f"检测到模板包含“{detected}”列。" if detected else (f"自动序号目标列：{target}" if target else ""))
+        self.sequence_enabled.blockSignals(True)
+        self.sequence_enabled.setChecked(target is not None)
+        self.sequence_enabled.blockSignals(False)
+        active = target is not None
+        self.sequence_enabled.setEnabled(detected is not None)
+        self.sequence_start.setEnabled(active)
+        self.sequence_mode.setEnabled(active)
+
     def preview(self) -> None:
         if self.analysis is None or self.dataset is None:
             QMessageBox.information(self, "信息不完整", "请先分析模板并选择数据源。"); return
         try:
-            result = self.fill_service.preview(self.analysis, self.dataset, self._mappings())
+            result = self.fill_service.preview(self.analysis, self.dataset, self._mappings(), self.sequence_start.value(), self.sequence_mode.currentData())
         except ValueError as error:
             QMessageBox.warning(self, "无法预览", str(error)); return
         warning = f"；合并单元格风险 {len(result.merged_cell_warnings)} 项" if result.merged_cell_warnings else ""
-        self.message.setText(f"将处理 {result.row_count} 行；模板已有值冲突 {result.existing_value_conflicts} 个{warning}。")
+        sequence = f"；自动序号：是，目标列 {result.sequence_target}，起始值 {result.sequence_start}" if result.sequence_target else "；自动序号：否"
+        self.message.setText(f"数据行：{result.row_count}；字段映射：{len(result.mappings)}；模板已有值冲突 {result.existing_value_conflicts} 个{sequence}{warning}。")
 
     def output(self) -> None:
         if self.analysis is None or self.dataset is None:
             QMessageBox.information(self, "信息不完整", "请先分析模板并选择数据源。"); return
         try:
-            result = self.fill_service.fill(self.analysis, self.dataset, self._mappings(), self.strategy_box.currentData())
+            result = self.fill_service.fill(self.analysis, self.dataset, self._mappings(), self.strategy_box.currentData(), self.sequence_start.value(), self.sequence_mode.currentData())
         except ValueError as error:
             QMessageBox.warning(self, "填写失败", str(error)); return
         QMessageBox.information(self, "填写完成", f"已另存到：\n{result.output_path}\n写入 {result.written_rows} 行，跳过 {result.skipped_rows} 行。")

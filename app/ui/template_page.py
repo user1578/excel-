@@ -7,7 +7,7 @@ from dataclasses import replace
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QDoubleSpinBox, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QMessageBox, QPushButton, QDoubleSpinBox, QInputDialog, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from app.ai.deepseek_parser import DeepSeekParser
@@ -152,9 +152,37 @@ class TemplatePage(QWidget):
         return TemplateSchema(self.name.text().strip(), self.student_related.isChecked(), self.description.text().strip() or None, self.rows.value(), [SheetSchema(self.sheet_name.text().strip(), list(self.fields))], self.style)
 
     def generate_template(self):
-        try: artifact = self.service.create(self._schema())
+        style = self._style_for_generation()
+        if style is None:
+            return
+        self.style = style
+        try: artifact = self.service.create(replace(self._schema(), style=style))
         except ValueError as error: QMessageBox.warning(self, "无法生成", str(error)); return
         QMessageBox.information(self, "生成完成", f"模板已生成：{artifact.workbook_path}"); self.refresh()
+
+    def _style_for_generation(self):
+        if self.style.title_mode != "ask":
+            return self.style
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("添加大标题")
+        dialog.setText("是否在第一行添加合并大标题？")
+        add = dialog.addButton("添加", QMessageBox.ButtonRole.AcceptRole)
+        omit = dialog.addButton("不添加", QMessageBox.ButtonRole.DestructiveRole)
+        dialog.addButton("取消生成", QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        if dialog.clickedButton() is add:
+            choice, accepted = QInputDialog.getItem(self, "大标题内容", "标题：", ["使用模板名称", "自定义标题"], editable=False)
+            if not accepted:
+                return None
+            if choice == "使用模板名称":
+                return replace(self.style, title_mode="template_name", show_main_title=True, main_title="")
+            title, accepted = QInputDialog.getText(self, "自定义标题", "标题文本：")
+            if not accepted:
+                return None
+            return replace(self.style, title_mode="custom", show_main_title=True, main_title=title.strip())
+        if dialog.clickedButton() is omit:
+            return replace(self.style, title_mode="none", show_main_title=False, main_title="")
+        return None
 
     def generate_ai_schema(self):
         self.ai_generate_button.setEnabled(False)

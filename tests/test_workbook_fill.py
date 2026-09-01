@@ -11,6 +11,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from app.models.table_dataset import Provenance, TableDataset, TableRow
 from app.parsers.workbook_template_analyzer import WorkbookTemplateAnalyzer
 from app.services.workbook_fill_service import (
+    AUTO_SEQUENCE,
     KEEP_EXISTING,
     SKIP_CONFLICTING_ROW,
     USE_NEW_VALUE,
@@ -66,7 +67,7 @@ def test_fill_creates_new_file_preserves_template_and_copies_style_and_formulas(
     analysis = WorkbookTemplateAnalyzer().analyze(template, "汇总表", 3)
     service = WorkbookFillService(tmp_path / "exports")
     mappings = service.default_mappings(analysis, source_dataset())
-    assert mappings == {"学生姓名": "name", "学籍号": "student_number", "所在行政班": "class_name", "联系电话": "phone", "备注": "custom:note"}
+    assert mappings == {"序号": AUTO_SEQUENCE, "学生姓名": "name", "学籍号": "student_number", "所在行政班": "class_name", "联系电话": "phone", "备注": "custom:note"}
     result = service.fill(analysis, source_dataset(), mappings, USE_NEW_VALUE)
 
     assert digest(template) == before

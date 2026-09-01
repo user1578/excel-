@@ -12,6 +12,7 @@ from openpyxl.utils import get_column_letter
 from app.utils.excel_safety import safe_excel_value
 
 STYLE_PRESETS = ("标准办公表格", "商务蓝色", "极简表格", "自定义")
+TITLE_MODES = ("ask", "none", "template_name", "custom")
 COLOR = re.compile(r"^[0-9A-Fa-f]{6}$")
 
 
@@ -20,6 +21,7 @@ class WorkbookStyleSchema:
     preset: str = "标准办公表格"
     overall_font_name: str = "宋体"
     overall_font_size: int = 11
+    title_mode: str = "ask"
     show_main_title: bool = False
     main_title: str = ""
     title_font_name: str = "宋体"
@@ -38,16 +40,16 @@ class WorkbookStyleSchema:
     header_row_height: float = 24
     header_wrap_text: bool = True
     body_font_size: int = 11
-    body_horizontal_alignment: str = "left"
+    body_horizontal_alignment: str = "center"
     body_vertical_alignment: str = "center"
     body_row_height: float = 22
     body_wrap_text: bool = True
     border_enabled: bool = True
     border_color: str = "000000"
     border_style: str = "thin"
-    show_gridlines: bool = False
+    show_gridlines: bool = True
     freeze_header: bool = True
-    auto_filter: bool = True
+    auto_filter: bool = False
     default_column_width: float | None = None
     required_display: str = "none"
     required_header_color: str = "C00000"
@@ -58,11 +60,15 @@ class WorkbookStyleSchema:
         if not value:
             return standard_office_style()
         allowed = {key: item for key, item in value.items() if key in cls.__dataclass_fields__}
+        if "title_mode" not in allowed:
+            allowed["title_mode"] = "custom" if allowed.get("show_main_title") and allowed.get("main_title") else "template_name" if allowed.get("show_main_title") else "none"
         return cls(**allowed)
 
     def validate(self) -> None:
         if self.preset not in STYLE_PRESETS:
             raise ValueError("样式预设不支持。")
+        if self.title_mode not in TITLE_MODES:
+            raise ValueError("大标题模式不支持。")
         for name, size in (("整体字号", self.overall_font_size), ("标题字号", self.title_font_size), ("表头字号", self.header_font_size), ("数据字号", self.body_font_size)):
             if not 6 <= size <= 72:
                 raise ValueError(f"{name}必须在 6 到 72 之间。")
@@ -81,13 +87,14 @@ class WorkbookStyleSchema:
 
 
 def standard_office_style() -> WorkbookStyleSchema:
-    return WorkbookStyleSchema()
+    return WorkbookStyleSchema(show_gridlines=True, auto_filter=False, body_horizontal_alignment="center", body_vertical_alignment="center")
 
 
 def business_blue_style() -> WorkbookStyleSchema:
     return WorkbookStyleSchema(
         preset="商务蓝色", header_fill_enabled=True, header_fill_color="1F4E78", header_font_color="FFFFFF",
-        border_color="D9E2F3", required_display="cell_fill", body_vertical_alignment="top",
+        border_color="D9E2F3", required_display="cell_fill", body_horizontal_alignment="left", body_vertical_alignment="top",
+        show_gridlines=False, auto_filter=True,
     )
 
 
@@ -147,8 +154,23 @@ class ExcelStyleRenderer:
                 cell.fill = fill
 
     def set_column_width(self, sheet, index: int, label: str, explicit: float | None = None) -> None:
-        width = explicit or self.style.default_column_width or min(max(len(label) + 4, 12), 35)
+        width = explicit or self.style.default_column_width or self._suggested_column_width(label) or min(max(len(label) + 4, 12), 35)
         sheet.column_dimensions[get_column_letter(index)].width = width
+
+    def _suggested_column_width(self, label: str) -> float | None:
+        if self.style.preset != "标准办公表格":
+            return None
+        text = str(label).rstrip("*").replace(" ", "")
+        exact = {"序号": 8, "序": 8, "编号": 8, "姓名": 12, "性别": 9, "民族": 10, "学号": 18, "联系电话": 17, "身份证号": 22, "寝室号": 13, "政治面貌": 13, "备注": 25}
+        if text in exact:
+            return exact[text]
+        if "家庭住址" in text or text in {"地址", "家庭地址"}:
+            return 32
+        if "专业班级" in text or text == "班级" or "班级" in text:
+            return 20
+        if "寝室" in text:
+            return 13
+        return None
 
     def configure_table(self, sheet, header_row: int, end_row: int, column_count: int) -> None:
         if self.style.freeze_header:

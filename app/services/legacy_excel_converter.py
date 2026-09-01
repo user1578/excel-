@@ -33,6 +33,9 @@ class LegacyExcelConverter:
         excel = workbook = None
         try:
             excel = client.DispatchEx("Excel.Application")
+        except Exception as error:
+            raise LegacyExcelConversionError("未检测到可用的 Microsoft Excel 自动化服务，请确认已安装并可正常启动 Microsoft Excel。") from error
+        try:
             excel.Visible = False
             excel.DisplayAlerts = False
             workbook = excel.Workbooks.Open(str(source_path.resolve()), ReadOnly=True)
@@ -59,5 +62,5 @@ class LegacyExcelConverter:
         try:
             import win32com.client
         except ImportError as error:
-            raise LegacyExcelConversionError("当前环境未安装 Microsoft Excel 自动化组件，无法打开 .xls 模板；请安装 Microsoft Excel，或将模板另存为 .xlsx 后再选择。") from error
+            raise LegacyExcelConversionError("当前 Python 环境缺少 pywin32，无法自动转换 .xls 模板。请先安装 pywin32，或使用 Excel/WPS 将文件另存为 .xlsx 后再选择。") from error
         return win32com.client

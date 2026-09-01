@@ -116,7 +116,11 @@ class ClassExportDialog(QDialog):
         layout = QVBoxLayout(self)
         title_bar = QHBoxLayout()
         self.title_input = QLineEdit(); self.title_input.setPlaceholderText("可选：表格主标题")
-        title_bar.addWidget(QLabel("主标题")); title_bar.addWidget(self.title_input, 1)
+        self.title_mode = QComboBox(); self.title_mode.addItem("不使用大标题", "none"); self.title_mode.addItem("使用默认标题", "default"); self.title_mode.addItem("自定义标题", "custom")
+        self.title_mode.currentIndexChanged.connect(self._title_mode_changed)
+        self.title_input.textChanged.connect(lambda text: self._select_custom_title_if_needed(text))
+        self._title_mode_changed()
+        title_bar.addWidget(QLabel("大标题")); title_bar.addWidget(self.title_mode); title_bar.addWidget(self.title_input, 1)
         layout.addLayout(title_bar)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["显示标题", "数据来源", "来源字段", "固定值", "列宽", "操作"])
@@ -218,6 +222,18 @@ class ClassExportDialog(QDialog):
         if accepted:
             self.exporter.delete_scheme(next(item.id for item in schemes if item.name == name))
 
+    def _title_mode_changed(self) -> None:
+        self.title_input.setEnabled(self.title_mode.currentData() == "custom")
+
+    def _select_custom_title_if_needed(self, text: str) -> None:
+        if text.strip() and self.title_mode.currentData() == "none":
+            self.title_mode.setCurrentIndex(self.title_mode.findData("custom"))
+
+    def _resolved_title(self) -> str:
+        if self.title_mode.currentData() == "default":
+            return f"{self.class_name}学生名单"
+        return self.title_input.text().strip() if self.title_mode.currentData() == "custom" else ""
+
     def edit_style(self) -> None:
         dialog = StyleDialog(self.style, self)
         if dialog.exec():
@@ -225,7 +241,7 @@ class ClassExportDialog(QDialog):
 
     def generate(self) -> None:
         try:
-            output = self.exporter.export(self.class_name, self.students, self.columns(), self.title_input.text(), self.style)
+            output = self.exporter.export(self.class_name, self.students, self.columns(), self._resolved_title(), self.style)
         except ValueError as error:
             QMessageBox.warning(self, "无法生成", str(error)); return
         QMessageBox.information(self, "生成完成", f"已另存到：\n{output}")
