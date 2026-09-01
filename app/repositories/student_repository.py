@@ -44,6 +44,11 @@ class StudentRepository:
     def list_all(self) -> list[Student]:
         return self._fetch_all("SELECT * FROM students ORDER BY class_name, student_number", ())
 
+    def list_by_class(self, class_name: str) -> list[Student]:
+        return self._fetch_all(
+            "SELECT * FROM students WHERE class_name = ? ORDER BY student_number, id", (class_name.strip(),)
+        )
+
     def search(self, keyword: str) -> list[Student]:
         pattern = f"%{keyword.strip()}%"
         return self._fetch_all(
@@ -98,3 +103,29 @@ class StudentRepository:
     def _count(self, sql: str, parameters: tuple[object, ...]) -> int:
         with self.database.connection() as connection:
             return int(connection.execute(sql, parameters).fetchone()[0])
+
+    def get_extra_fields(self, student_id: int) -> dict[str, dict[str, str]]:
+        with self.database.connection() as connection:
+            rows = connection.execute(
+                "SELECT field_name, field_key, field_value FROM student_extra_fields WHERE student_id = ? ORDER BY field_name",
+                (student_id,),
+            ).fetchall()
+        return {str(row["field_key"]): {"name": str(row["field_name"]), "value": str(row["field_value"] or "")} for row in rows}
+
+    def set_extra_field(self, student_id: int, field_name: str, field_key: str, field_value: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """INSERT INTO student_extra_fields (student_id, field_name, field_key, field_value)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(student_id, field_key) DO UPDATE SET
+                    field_name=excluded.field_name, field_value=excluded.field_value,
+                    updated_at=STRFTIME('%Y-%m-%dT%H:%M:%fZ','now')""",
+                (student_id, field_name.strip(), field_key.strip(), field_value),
+            )
+
+    def delete_extra_field(self, student_id: int, field_key: str) -> bool:
+        with self.database.transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM student_extra_fields WHERE student_id = ? AND field_key = ?", (student_id, field_key)
+            )
+            return cursor.rowcount == 1

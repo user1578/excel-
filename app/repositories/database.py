@@ -111,6 +111,28 @@ CREATE INDEX IF NOT EXISTS idx_attendance_duplicate_lookup
 ON attendance_records(task_id, student_id, date, course, attendance_type, status);
 CREATE INDEX IF NOT EXISTS idx_pending_records_status ON pending_records(task_id, status);
 CREATE INDEX IF NOT EXISTS idx_import_logs_task ON import_logs(task_id, id);
+
+CREATE TABLE IF NOT EXISTS student_extra_fields (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ student_id INTEGER NOT NULL,
+ field_name TEXT NOT NULL,
+ field_key TEXT NOT NULL,
+ field_value TEXT,
+ created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ','now')),
+ updated_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ','now')),
+ UNIQUE(student_id, field_key),
+ FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_student_extra_fields_student_id ON student_extra_fields(student_id);
+
+CREATE TABLE IF NOT EXISTS table_export_schemes (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ name TEXT NOT NULL UNIQUE,
+ title TEXT,
+ configuration_json TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ','now')),
+ updated_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ','now'))
+);
 """
 
 

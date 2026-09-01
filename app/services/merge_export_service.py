@@ -56,8 +56,8 @@ class MergeExportService:
             ("汇总时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             ("合并模式", "直接纵向合并" if result.mode.value == "vertical" else "按学生关联合并"),
             ("总行数", len(result.records)),
-            ("成功关联数量", len(result.records) - len(result.unresolved_record_indexes)),
-            ("未关联数量", len(result.unresolved_record_indexes)),
+            ("成功关联数量", len(result.records) - MergeExportService._unlinked_count(result)),
+            ("未关联数量", MergeExportService._unlinked_count(result)),
             ("冲突数量", len(result.conflicts)),
             ("已解决冲突数量", len(result.resolved_conflicts)),
             ("未解决冲突数量", len(result.unresolved_conflicts)),
@@ -68,6 +68,16 @@ class MergeExportService:
             sheet.append([key, safe_excel_value(value)])
         sheet.column_dimensions["A"].width = 22
         sheet.column_dimensions["B"].width = 42
+
+    @staticmethod
+    def _unlinked_count(result: MergeResult) -> int:
+        """unresolved 与 unmatched 都代表未成功关联，索引去重避免重复统计。"""
+        unresolved = set(result.unresolved_record_indexes)
+        unmatched = {
+            index for index, record in enumerate(result.records)
+            if getattr(record, "match_status", None) == "unmatched"
+        }
+        return len(unresolved | unmatched)
 
     @staticmethod
     def _write_conflicts(sheet, result: MergeResult) -> None:

@@ -49,6 +49,13 @@ class DeepSeekClient:
     def request_template_json(self, user_requirement: str) -> str:
         return self._request(self._config(), [{"role": "system", "content": "你是模板 Schema 解析器。只返回 JSON 对象，不要 Markdown、解释、代码或其他文字。"}, {"role": "user", "content": user_requirement}])
 
+    def request_table_dataset_json(self, text: str) -> str:
+        """仅发送用户当前粘贴的文本；绝不读取或发送本地学生库。"""
+        prompt = """将下列用户文本结构化为 JSON。只返回对象：
+{"columns":["字段名"],"rows":[{"字段名":"值"}]}
+不得补充原文本没有的信息；不得返回 Markdown、解释、数据库操作、Excel 指令或文件内容。文本：""" + text
+        return self._request(self._config(), [{"role": "system", "content": "你是受限文本结构化器，只返回 JSON。"}, {"role": "user", "content": prompt}])
+
     def test_connection(self) -> None:
         """仅验证 API 可响应；不解析需求、不生成 Schema 或 Excel。"""
         self._request(self._config(), [{"role": "user", "content": "请仅回复 OK。"}])

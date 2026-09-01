@@ -5,15 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSpinBox,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton, QSpinBox,
+    QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from app.models.table_dataset import TableDataset, TableRow
+from app.models.table_dataset import Provenance, TableDataset, TableRow
 from app.parsers.workbook_template_analyzer import WorkbookTemplateAnalyzer
 from app.services.data_workspace_service import DataWorkspaceService
 from app.services.table_analysis_service import TableAnalysisService
 from app.services.workbook_fill_service import KEEP_EXISTING, SKIP_CONFLICTING_ROW, USE_NEW_VALUE, WorkbookFillService
+from app.services.class_export_service import ClassExportService
+from app.services.text_dataset_service import TextDatasetParseError, TextDatasetService
+from app.ai.deepseek_client import DeepSeekClient, DeepSeekClientError, DeepSeekConfig
 
 
 class WorkbookFillPage(QWidget):
@@ -46,7 +49,7 @@ class WorkbookFillPage(QWidget):
         layout.addLayout(template_bar)
         source_bar = QHBoxLayout()
         self.source_box = QComboBox()
-        self.source_box.addItems(["当前资料汇总结果", "单独选择 xlsx/csv", "学生库"])
+        self.source_box.addItems(["当前资料汇总结果", "单独选择 xlsx/csv", "学生库", "班级学生", "粘贴文本", "TXT 文件"])
         choose_source = QPushButton("选择数据源")
         choose_source.clicked.connect(self.choose_source)
         self.source_label = QLabel("尚未选择数据源")
@@ -95,15 +98,29 @@ class WorkbookFillPage(QWidget):
     def choose_source(self) -> None:
         choice = self.source_box.currentText()
         if choice == "当前资料汇总结果":
-            result = self.workspace.current_merge_result
-            if result is None or self.workspace.current_dataset is None:
-                QMessageBox.information(self, "没有汇总结果", "请先在“资料汇总”完成一次汇总。"); return
+            if self.workspace.current_dataset is None:
+                QMessageBox.information(self, "没有数据集", "请先完成资料汇总，或从班级库按模板生成。"); return
             self.dataset = self.workspace.current_dataset
         elif choice == "学生库":
-            students = self.master.list_students()
-            columns = ["name", "student_number", "class_name", "major", "grade", "phone", "dormitory", "remark"]
-            rows = [TableRow({key: getattr(student, key) or "" for key in columns}, Provenance("学生库", None, index)) for index, student in enumerate(students, 1)]
-            self.dataset = TableDataset(columns, rows, "学生库", None, 1, column_labels={"name": "姓名", "student_number": "学号", "class_name": "班级", "major": "专业", "grade": "年级", "phone": "手机号", "dormitory": "寝室", "remark": "备注"})
+            self.dataset = ClassExportService(self.master).students_dataset(self.master.list_students(), "学生库")
+        elif choice == "班级学生":
+            classes = self.master.list_classes()
+            name, accepted = QInputDialog.getItem(self, "选择班级", "班级：", [item.standard_name for item in classes], editable=False)
+            if not accepted:
+                return
+            self.dataset = ClassExportService(self.master).students_dataset(self.master.list_students_by_class(name), name)
+        elif choice == "粘贴文本":
+            dialog = TextSourceDialog(TextDatasetService(), self)
+            if dialog.exec() != dialog.DialogCode.Accepted:
+                return
+            self.dataset = dialog.dataset
+        elif choice == "TXT 文件":
+            text, _ = QFileDialog.getOpenFileName(self, "选择 TXT 数据源", "", "文本文件 (*.txt)")
+            if not text: return
+            try:
+                self.dataset = TextDatasetService().parse_file(text)
+            except TextDatasetParseError as error:
+                QMessageBox.warning(self, "文本解析失败", str(error)); return
         else:
             text, _ = QFileDialog.getOpenFileName(self, "选择数据源", "", "资料文件 (*.xlsx *.csv)")
             if not text: return
@@ -115,6 +132,7 @@ class WorkbookFillPage(QWidget):
                 QMessageBox.warning(self, "数据源分析失败", str(error)); return
         self.source_label.setText(f"{self.dataset.source_file}，{len(self.dataset.rows)} 行")
         self._refresh_mapping_table()
+
 
     def _refresh_mapping_table(self) -> None:
         self.mapping_table.setRowCount(0)
@@ -157,3 +175,62 @@ class WorkbookFillPage(QWidget):
         except ValueError as error:
             QMessageBox.warning(self, "填写失败", str(error)); return
         QMessageBox.information(self, "填写完成", f"已另存到：\n{result.output_path}\n写入 {result.written_rows} 行，跳过 {result.skipped_rows} 行。")
+
+
+class TextSourceDialog(QDialog):
+    """本地解析后显示字段、行数与预览，确认前不改变页面数据源。"""
+    def __init__(self, parser: TextDatasetService, parent=None) -> None:
+        super().__init__(parent)
+        self.parser, self.dataset = parser, None
+        self.setWindowTitle("粘贴文本")
+        self.resize(720, 520)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("支持 TSV（第一行为表头）或键值记录（空行分隔）。内容仅在本机解析。"))
+        self.editor = QTextEdit(); self.editor.setPlaceholderText("在此粘贴文本…")
+        layout.addWidget(self.editor, 1)
+        parse = QPushButton("解析并预览"); parse.clicked.connect(self.parse)
+        layout.addWidget(parse)
+        config = DeepSeekConfig.load()
+        if config.enabled and config.api_key and config.base_url:
+            ai_parse = QPushButton("AI 结构化解析")
+            ai_parse.clicked.connect(self.parse_with_ai)
+            layout.addWidget(ai_parse)
+        self.message = QLabel("尚未解析")
+        layout.addWidget(self.message)
+        self.preview = QTableWidget(0, 0); self.preview.setMaximumHeight(160)
+        layout.addWidget(self.preview)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def parse(self) -> None:
+        try:
+            self.dataset = self.parser.parse_text(self.editor.toPlainText())
+        except TextDatasetParseError as error:
+            QMessageBox.warning(self, "文本解析失败", str(error)); return
+        self._show_dataset()
+
+    def parse_with_ai(self) -> None:
+        text = self.editor.toPlainText().strip()
+        if not text:
+            QMessageBox.information(self, "请输入文本", "只会发送您在当前输入框明确粘贴的文本。")
+            return
+        try:
+            raw = DeepSeekClient().request_table_dataset_json(text)
+            self.dataset = self.parser.parse_ai_json(raw)
+        except (DeepSeekClientError, TextDatasetParseError) as error:
+            QMessageBox.warning(self, "AI 解析失败", str(error)); return
+        self._show_dataset()
+
+    def _show_dataset(self) -> None:
+        self.preview.setColumnCount(len(self.dataset.columns)); self.preview.setRowCount(min(10, len(self.dataset.rows)))
+        self.preview.setHorizontalHeaderLabels([self.dataset.display_label(key) for key in self.dataset.columns])
+        for row, item in enumerate(self.dataset.rows[:10]):
+            for column, key in enumerate(self.dataset.columns): self.preview.setItem(row, column, QTableWidgetItem(str(item.values.get(key, ""))))
+        self.message.setText(f"识别字段 {len(self.dataset.columns)} 个，数据 {len(self.dataset.rows)} 行；确认后才作为填充数据源。")
+
+    def accept(self) -> None:
+        if self.dataset is None:
+            QMessageBox.information(self, "请先解析", "请先解析并检查预览。")
+            return
+        super().accept()

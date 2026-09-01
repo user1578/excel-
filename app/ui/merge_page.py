@@ -15,6 +15,7 @@ from app.models.table_dataset import TableDataset
 from app.services.data_workspace_service import DataWorkspaceService
 from app.services.dataset_merge_service import DatasetMergeService
 from app.services.merge_export_service import MergeExportService
+from app.services.master_data_import_service import MasterDataImportService
 from app.services.table_analysis_service import TableAnalysisService
 
 
@@ -31,12 +32,13 @@ class SourceSelection:
 
 
 class MergePage(QWidget):
-    def __init__(self, workspace: DataWorkspaceService, parent=None) -> None:
+    def __init__(self, workspace: DataWorkspaceService, master=None, parent=None) -> None:
         super().__init__(parent)
         self.workspace = workspace
         self.analysis_service = TableAnalysisService()
         self.merge_service = DatasetMergeService()
         self.export_service = MergeExportService()
+        self.master_import = MasterDataImportService(master.students.database) if master else None
         self.sources: list[SourceSelection] = []
         self.result: MergeResult | None = None
         self._build()
@@ -71,10 +73,12 @@ class MergePage(QWidget):
         analyze = QPushButton("分析全部来源")
         merge = QPushButton("执行汇总")
         export = QPushButton("导出汇总")
+        import_master = QPushButton("导入基础库")
         analyze.clicked.connect(self.analyze_all)
         merge.clicked.connect(self.run_merge)
         export.clicked.connect(self.export_result)
-        action.addWidget(QLabel("模式")); action.addWidget(self.mode_box); action.addWidget(analyze); action.addWidget(merge); action.addWidget(export); action.addStretch()
+        import_master.clicked.connect(self.import_master_data)
+        action.addWidget(QLabel("模式")); action.addWidget(self.mode_box); action.addWidget(analyze); action.addWidget(merge); action.addWidget(export); action.addWidget(import_master); action.addStretch()
         layout.addLayout(action)
         self.message = QLabel("尚未添加来源文件。")
         layout.addWidget(self.message)
@@ -174,7 +178,29 @@ class MergePage(QWidget):
             origin = f"{conflict.source_a.source_file}:{conflict.source_a.source_row} / {conflict.source_b.source_file}:{conflict.source_b.source_row}"
             values = [self.result.column_labels.get(conflict.field, conflict.field), conflict.value_a, conflict.value_b, origin, conflict.resolution.value]
             for column, value in enumerate(values): self.conflicts.setItem(row, column, QTableWidgetItem(str(value)))
-        self.message.setText(f"汇总 {len(self.result.records)} 行；未解决冲突 {len(self.result.unresolved_conflicts)} 个；未关联 {len(self.result.unresolved_record_indexes)} 行。")
+        unlinked = MergeExportService._unlinked_count(self.result)
+        self.message.setText(f"汇总 {len(self.result.records)} 行；未解决冲突 {len(self.result.unresolved_conflicts)} 个；未关联 {unlinked} 行。")
+
+    def import_master_data(self) -> None:
+        if self.master_import is None or self.workspace.current_dataset is None:
+            QMessageBox.information(self, "没有可导入资料", "请先完成一次资料汇总。")
+            return
+        preview = self.master_import.preview(self.workspace.current_dataset)
+        details = (
+            f"新增班级：{preview.new_classes}；已有班级：{preview.existing_classes}；班级冲突：{len(preview.class_conflicts)}\n"
+            f"新增寝室：{preview.new_dormitories}；已有寝室：{preview.existing_dormitories}；待确认：{len(preview.pending_dormitories)}\n"
+            f"新增学生：{preview.new_students}；已有学生：{preview.existing_students}；可补全：{preview.updatable_students}；学生冲突：{len(preview.student_conflicts)}\n"
+            f"扩展字段：{preview.extra_field_count} 个\n\n"
+            "仅补全已有学生的空字段；已有非空冲突不会覆盖。确认后才写入本机数据库。"
+        )
+        if QMessageBox.question(self, "导入基础库预览", details, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.master_import.apply(self.workspace.current_dataset)
+        except Exception as error:
+            QMessageBox.critical(self, "导入失败", f"导入已回滚，未写入部分数据：{error}")
+            return
+        QMessageBox.information(self, "导入完成", "基础库已按班级、寝室、学生顺序原子写入。待确认寝室与冲突项未自动覆盖。")
 
     def resolve_selected(self, resolution: ConflictResolution) -> None:
         if self.result is None or self.conflicts.currentRow() < 0:

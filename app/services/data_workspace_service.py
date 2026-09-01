@@ -25,3 +25,8 @@ class DataWorkspaceService:
             1,
             column_labels=dict(result.column_labels),
         )
+
+    def set_dataset(self, dataset: TableDataset) -> None:
+        """接收班级学生或文本等来源；不伪造资料汇总结果。"""
+        self.current_dataset = dataset
+        self.current_merge_result = None
