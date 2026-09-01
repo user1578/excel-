@@ -132,8 +132,8 @@ def test_class_student_selection_survives_filtering_and_export_rows_are_dynamic(
     assert [item.id for item in students_dialog.selected_students()] == [second.id]
     export_dialog = ClassExportDialog(service, class_record.standard_name, [first, second])
     original = [item.title for item in export_dialog.columns()]
-    export_dialog._move_action_row(export_dialog.table.cellWidget(4, 4), -1)
-    export_dialog._move_action_row(export_dialog.table.cellWidget(0, 4), 1)
-    export_dialog._remove_action_row(export_dialog.table.cellWidget(2, 4))
+    export_dialog._move_action_row(export_dialog.table.cellWidget(4, 5), -1)
+    export_dialog._move_action_row(export_dialog.table.cellWidget(0, 5), 1)
+    export_dialog._remove_action_row(export_dialog.table.cellWidget(2, 5))
     assert len(export_dialog.columns()) == len(original) - 1 and len({item.title for item in export_dialog.columns()}) == len(export_dialog.columns())
     students_dialog.close(); export_dialog.close()

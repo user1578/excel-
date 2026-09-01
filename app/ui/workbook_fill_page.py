@@ -15,6 +15,7 @@ from app.services.data_workspace_service import DataWorkspaceService
 from app.services.table_analysis_service import TableAnalysisService
 from app.services.workbook_fill_service import KEEP_EXISTING, SKIP_CONFLICTING_ROW, USE_NEW_VALUE, WorkbookFillService
 from app.services.class_export_service import ClassExportService
+from app.services.legacy_excel_converter import LegacyExcelConversionError, LegacyExcelConverter
 from app.services.text_dataset_service import TextDatasetParseError, TextDatasetService
 from app.ai.deepseek_client import DeepSeekClient, DeepSeekClientError, DeepSeekConfig
 
@@ -27,7 +28,9 @@ class WorkbookFillPage(QWidget):
         self.template_analyzer = WorkbookTemplateAnalyzer()
         self.table_analyzer = TableAnalysisService()
         self.fill_service = WorkbookFillService()
+        self.legacy_converter = LegacyExcelConverter()
         self.template_path: Path | None = None
+        self.original_template_path: Path | None = None
         self.analysis = None
         self.dataset: TableDataset | None = None
         self._build()
@@ -36,7 +39,7 @@ class WorkbookFillPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(36, 32, 36, 32)
         layout.addWidget(QLabel("表格填充", objectName="pageTitle"))
-        layout.addWidget(QLabel("仅支持 .xlsx；模板始终另存。用户文本会安全转义，程序公式保持为公式。"))
+        layout.addWidget(QLabel("支持 .xlsx 和旧版 .xls 模板；.xls 仅转换为临时 .xlsx 工作副本，原模板始终不改动。用户文本会安全转义，程序公式保持为公式。"))
         template_bar = QHBoxLayout()
         choose = QPushButton("选择模板")
         choose.clicked.connect(self.choose_template)
@@ -74,20 +77,27 @@ class WorkbookFillPage(QWidget):
         layout.addWidget(self.message)
 
     def choose_template(self) -> None:
-        text, _ = QFileDialog.getOpenFileName(self, "选择 .xlsx 模板", "", "Excel 模板 (*.xlsx)")
+        text, _ = QFileDialog.getOpenFileName(self, "选择 Excel 模板", "", "Excel 模板 (*.xlsx *.xls)")
         if not text: return
-        self.template_path = Path(text)
+        original = Path(text)
+        try:
+            working_copy = self.legacy_converter.convert(original) if self.legacy_converter.is_legacy_template(original) else original
+        except LegacyExcelConversionError as error:
+            QMessageBox.warning(self, "旧版模板不可用", str(error)); return
+        self.template_path = working_copy
+        self.original_template_path = original
         try:
             sheets = self.template_analyzer.sheets(self.template_path)
         except ValueError as error:
+            self.template_path = self.original_template_path = None
             QMessageBox.warning(self, "模板不可用", str(error)); return
-        self.template_label.setText(self.template_path.name)
+        self.template_label.setText(original.name + ("（已安全转换为临时 .xlsx 副本）" if working_copy != original else ""))
         self.sheet_box.clear(); self.sheet_box.addItems(sheets)
         self.analysis = None
 
     def analyze_template(self) -> None:
         if self.template_path is None or not self.sheet_box.currentText():
-            QMessageBox.information(self, "请选择模板", "请先选择一个 .xlsx 模板。"); return
+            QMessageBox.information(self, "请选择模板", "请先选择一个 Excel 模板。"); return
         try:
             self.analysis = self.template_analyzer.analyze(self.template_path, self.sheet_box.currentText(), self.header_spin.value() or None)
         except ValueError as error:

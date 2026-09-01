@@ -8,14 +8,12 @@ from pathlib import Path
 from typing import Iterable
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
-
 from app.models.table_dataset import Provenance, TableDataset, TableRow
 from app.models.student import Student
 from app.repositories.table_export_scheme_repository import TableExportScheme, TableExportSchemeRepository
 from app.services.master_data_service import MasterDataService
 from app.utils.excel_safety import safe_excel_value
+from app.template_engine.styles import ExcelStyleRenderer, WorkbookStyleSchema, standard_office_style
 
 
 CORE_LABELS = {"name": "姓名", "student_number": "学号", "class_name": "班级", "major": "专业", "grade": "年级", "phone": "联系电话", "dormitory": "寝室", "remark": "备注"}
@@ -32,12 +30,10 @@ class ExportColumn:
     source_type: str
     source_field: str = ""
     fixed_value: str = ""
+    column_width: float | None = None
 
 
 class ClassExportService:
-    HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
-    HEADER_FONT = Font(color="FFFFFF", bold=True)
-    BORDER = Border(bottom=Side(style="thin", color="D9E2F3"))
 
     def __init__(self, master: MasterDataService, exports_directory: str | Path | None = None) -> None:
         self.master = master
@@ -63,38 +59,31 @@ class ClassExportService:
             rows.append(TableRow(values, Provenance(source_name, None, index + 1)))
         return TableDataset(columns, rows, source_name, None, 1, column_labels=labels, custom_fields={key for key in columns if key.startswith("extra:")})
 
-    def export(self, class_name: str, students: Iterable[Student], columns: list[ExportColumn], title: str = "") -> Path:
+    def export(self, class_name: str, students: Iterable[Student], columns: list[ExportColumn], title: str = "", style: WorkbookStyleSchema | None = None) -> Path:
         if not columns:
             raise ValueError("请至少保留一个导出列。")
         selected = list(students)
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "学生名单"
-        sheet.sheet_view.showGridLines = False
-        header_row = 2 if title.strip() else 1
-        if title.strip():
-            sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(columns))
-            cell = sheet.cell(1, 1, safe_excel_value(title.strip()))
-            cell.font = Font(size=14, bold=True)
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            sheet.row_dimensions[1].height = 28
-        for column_index, definition in enumerate(columns, 1):
-            cell = sheet.cell(header_row, column_index, safe_excel_value(definition.title))
-            cell.fill = self.HEADER_FILL
-            cell.font = self.HEADER_FONT
-            cell.alignment = Alignment(horizontal="center", vertical="center")
+        resolved_style = style or standard_office_style()
+        if title.strip() and not resolved_style.show_main_title:
+            resolved_style = WorkbookStyleSchema(**(resolved_style.__dict__ | {"show_main_title": True, "main_title": title.strip()}))
+        renderer = ExcelStyleRenderer(resolved_style)
+        renderer.prepare_sheet(sheet)
+        header_row = renderer.write_title(sheet, len(columns), title.strip() or "学生名单")
+        renderer.style_header(sheet, header_row, [safe_excel_value(item.title) for item in columns])
         for row_index, student in enumerate(selected, 1):
             extras = self.master.get_student_extra_fields(student.id) if student.id else {}
             for column_index, definition in enumerate(columns, 1):
                 value = self._column_value(definition, student, extras, row_index)
                 cell = sheet.cell(header_row + row_index, column_index, safe_excel_value(value))
-                cell.alignment = Alignment(vertical="top", wrap_text=True)
-                cell.border = self.BORDER
-        sheet.freeze_panes = f"A{header_row + 1}"
-        sheet.auto_filter.ref = f"A{header_row}:{get_column_letter(len(columns))}{max(header_row, header_row + len(selected))}"
+                renderer.style_body_cell(cell)
+            sheet.row_dimensions[header_row + row_index].height = renderer.style.body_row_height
+        renderer.configure_table(sheet, header_row, header_row + len(selected), len(columns))
         for index, definition in enumerate(columns, 1):
-            width = max(len(definition.title), *(len(str(self._column_value(definition, student, self.master.get_student_extra_fields(student.id) if student.id else {}, row + 1))) for row, student in enumerate(selected)), 8) + 2
-            sheet.column_dimensions[get_column_letter(index)].width = min(width, 30)
+            width = definition.column_width or max(len(definition.title), *(len(str(self._column_value(definition, student, self.master.get_student_extra_fields(student.id) if student.id else {}, row + 1))) for row, student in enumerate(selected)), 8) + 2
+            renderer.set_column_width(sheet, index, definition.title, min(width, 35))
         self.exports_directory.mkdir(parents=True, exist_ok=True)
         output = self._unique_path(f"{self._safe_name(class_name)}_{self._safe_name(title) if title.strip() else '学生名单'}")
         workbook.save(output)

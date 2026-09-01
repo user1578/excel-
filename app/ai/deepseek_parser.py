@@ -38,7 +38,8 @@ class DeepSeekParser:
             domain_rules = "早读异常登记必须包含：姓名、学号、班级、日期、迟到、缺勤、请假、备注；不要生成统计 Sheet。\n"
         return """你必须返回 TemplateSchema JSON，不是表格数据 JSON。禁止返回 {"姓名":""}、字段值、示例行或任意其他结构。
 唯一允许的结构骨架如下：
-{"template_name":"模板名","student_related":true,"description":"说明","default_rows":100,"sheets":[{"name":"数据录入","fields":[{"name":"姓名","field_type":"name","required":true,"default_value":null,"options":[],"data_source":null,"formula":null,"description":"","standard_field":"name","allow_blank":false}]}]}
+{"template_name":"模板名","student_related":true,"description":"说明","default_rows":100,"style":{"preset":"标准办公表格","show_main_title":false,"required_display":"none"},"sheets":[{"name":"数据录入","fields":[{"name":"姓名","field_type":"name","required":true,"default_value":null,"options":[],"data_source":null,"formula":null,"description":"","standard_field":"name","allow_blank":false,"column_width":null}]}]}
+style 是可选对象；缺失时本地会采用标准办公表格。若提供 style，只能使用安全的样式字段：preset（标准办公表格、商务蓝色、极简表格、自定义）、show_main_title、main_title、required_display（none、asterisk、header_color、cell_fill）、以及字号、行高、对齐、颜色、边框、冻结和筛选等基础外观配置；不得包含宏、公式、文件路径或其他字段。
 只能使用字段类型：text, integer, decimal, date, percentage, select, name, student_number, class_name, dormitory, formula。学生相关模板要设 student_related=true。计算字段公式必须只使用 {字段名}、数字、+、-、*、/、()；例如到课率只能写 {实到人数}/{应到人数}。公式禁止开头 =、IFERROR、任何函数、逗号、Excel 单元格坐标、外部链接和宏；本地生成器会安全处理除零。options 使用 []，不要使用 null。只返回一个 JSON 对象，禁止 Markdown 和解释文字。
 补充领域规则：""" + domain_rules + "需求：" + requirement
 
@@ -103,6 +104,6 @@ class DeepSeekParser:
                         field = replace(field, data_source="dormitories")
                 fields.append(field)
             sheets.append(SheetSchema(sheet.name, fields))
-        normalized = TemplateSchema(schema.template_name, schema.student_related, schema.description, schema.default_rows, sheets)
+        normalized = TemplateSchema(schema.template_name, schema.student_related, schema.description, schema.default_rows, sheets, schema.style)
         normalized.validate()
         return normalized
