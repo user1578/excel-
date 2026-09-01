@@ -82,7 +82,7 @@ def test_generator_creates_validation_formats_formula_and_hidden_data(template_s
     sheet = workbook["数据录入"]
     assert workbook["_系统数据"].sheet_state == "hidden"
     assert workbook["使用说明"]["A1"].value == "模板名称"
-    assert sheet.freeze_panes == "A2" and sheet.auto_filter.ref is None
+    assert sheet.freeze_panes is None and sheet.auto_filter.ref is None
     assert sheet["D2"].number_format == "yyyy-mm-dd"
     assert sheet["H2"].value == "=IFERROR(G2/F2,0)"
     assert len(sheet.data_validations.dataValidation) == 2

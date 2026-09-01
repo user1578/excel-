@@ -155,14 +155,33 @@ class TemplatePage(QWidget):
         style = self._style_for_generation()
         if style is None:
             return
-        self.style = style
         try: artifact = self.service.create(replace(self._schema(), style=style))
         except ValueError as error: QMessageBox.warning(self, "无法生成", str(error)); return
         QMessageBox.information(self, "生成完成", f"模板已生成：{artifact.workbook_path}"); self.refresh()
 
     def _style_for_generation(self):
-        if self.style.title_mode != "ask":
-            return self.style
+        style = self.style
+        if style.title_mode == "ask":
+            style = self._ask_title_style(style)
+            if style is None:
+                return None
+        if style.freeze_mode == "ask":
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle("冻结表头")
+            dialog.setText("是否冻结表头？")
+            freeze = dialog.addButton("冻结", QMessageBox.ButtonRole.AcceptRole)
+            no_freeze = dialog.addButton("不冻结", QMessageBox.ButtonRole.DestructiveRole)
+            dialog.addButton("取消生成", QMessageBox.ButtonRole.RejectRole)
+            dialog.exec()
+            if dialog.clickedButton() is freeze:
+                style = self._style_with_freeze_choice(style, True)
+            elif dialog.clickedButton() is no_freeze:
+                style = self._style_with_freeze_choice(style, False)
+            else:
+                return None
+        return style
+
+    def _ask_title_style(self, style):
         dialog = QMessageBox(self)
         dialog.setWindowTitle("添加大标题")
         dialog.setText("是否在第一行添加合并大标题？")
@@ -175,14 +194,19 @@ class TemplatePage(QWidget):
             if not accepted:
                 return None
             if choice == "使用模板名称":
-                return replace(self.style, title_mode="template_name", show_main_title=True, main_title="")
+                return replace(style, title_mode="template_name", show_main_title=True, main_title="")
             title, accepted = QInputDialog.getText(self, "自定义标题", "标题文本：")
             if not accepted:
                 return None
-            return replace(self.style, title_mode="custom", show_main_title=True, main_title=title.strip())
+            return replace(style, title_mode="custom", show_main_title=True, main_title=title.strip())
         if dialog.clickedButton() is omit:
-            return replace(self.style, title_mode="none", show_main_title=False, main_title="")
+            return replace(style, title_mode="none", show_main_title=False, main_title="")
         return None
+
+    @staticmethod
+    def _style_with_freeze_choice(style, freeze_header: bool):
+        """将“生成时询问”的选择仅应用于当前生成的 Schema。"""
+        return replace(style, freeze_mode="header" if freeze_header else "none", freeze_header=freeze_header)
 
     def generate_ai_schema(self):
         self.ai_generate_button.setEnabled(False)

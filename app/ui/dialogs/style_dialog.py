@@ -24,9 +24,14 @@ class StyleDialog(QDialog):
         self.header_fill = self._check(style.header_fill_enabled); self.header_color = QLineEdit(style.header_fill_color); self.header_font_color = QLineEdit(style.header_font_color); self.header_bold = self._check(style.header_bold); self.header_height = self._double(style.header_row_height, 12, 120); self.header_align = self._alignment(style.header_horizontal_alignment); self.header_wrap = self._check(style.header_wrap_text)
         self.border_enabled = self._check(style.border_enabled); self.border_color = QLineEdit(style.border_color); self.border_style = QComboBox(); self.border_style.addItems(["thin", "medium", "thick"]); self.border_style.setCurrentText(style.border_style)
         self.body_height = self._double(style.body_row_height, 12, 120); self.body_align = self._alignment(style.body_horizontal_alignment); self.body_wrap = self._check(style.body_wrap_text)
-        self.freeze = self._check(style.freeze_header); self.filter = self._check(style.auto_filter); self.gridlines = self._check(style.show_gridlines)
+        self.freeze_mode = QComboBox()
+        for label, value in (("不冻结", "none"), ("冻结表头", "header"), ("生成时询问", "ask")):
+            self.freeze_mode.addItem(label, value)
+        self.freeze_mode.setCurrentIndex(max(0, self.freeze_mode.findData(style.freeze_mode)))
+        self.auto_fit = self._check(style.auto_fit); self.auto_fit.setToolTip("仅影响新生成的模板和班级表，不修改已有 Excel 模板格式。")
+        self.filter = self._check(style.auto_filter); self.gridlines = self._check(style.show_gridlines)
         self.default_width = self._double(style.default_column_width or 0, 0, 80); self.required_display = QComboBox(); self.required_display.addItems(["none", "asterisk", "header_color", "cell_fill"]); self.required_display.setCurrentText(style.required_display)
-        for label, widget in (("样式预设", self.preset), ("整体字体", self.font_name), ("整体字号", self.font_size), ("大标题模式", self.title_mode), ("自定义标题文本", self.title), ("标题字号", self.title_size), ("标题加粗", self.title_bold), ("标题行高", self.title_height), ("标题对齐", self.title_align), ("表头填充", self.header_fill), ("表头填充色（RRGGBB）", self.header_color), ("表头字体色（RRGGBB）", self.header_font_color), ("表头加粗", self.header_bold), ("表头行高", self.header_height), ("表头对齐", self.header_align), ("表头换行", self.header_wrap), ("边框", self.border_enabled), ("边框色（RRGGBB）", self.border_color), ("边框粗细", self.border_style), ("数据行高", self.body_height), ("数据对齐", self.body_align), ("数据换行", self.body_wrap), ("冻结表头", self.freeze), ("自动筛选", self.filter), ("显示网格线", self.gridlines), ("默认列宽（0=自动）", self.default_width), ("必填提示", self.required_display)):
+        for label, widget in (("样式预设", self.preset), ("整体字体", self.font_name), ("整体字号", self.font_size), ("大标题模式", self.title_mode), ("自定义标题文本", self.title), ("标题字号", self.title_size), ("标题加粗", self.title_bold), ("标题行高", self.title_height), ("标题对齐", self.title_align), ("表头填充", self.header_fill), ("表头填充色（RRGGBB）", self.header_color), ("表头字体色（RRGGBB）", self.header_font_color), ("表头加粗", self.header_bold), ("表头行高", self.header_height), ("表头对齐", self.header_align), ("表头换行", self.header_wrap), ("边框", self.border_enabled), ("边框色（RRGGBB）", self.border_color), ("边框粗细", self.border_style), ("数据行高", self.body_height), ("数据对齐", self.body_align), ("数据换行", self.body_wrap), ("冻结窗格", self.freeze_mode), ("根据内容自动调整", self.auto_fit), ("自动筛选", self.filter), ("显示网格线", self.gridlines), ("默认列宽（0=自动）", self.default_width), ("必填提示", self.required_display)):
             form.addRow(label, widget)
         layout.addLayout(form)
         self.preset.currentTextChanged.connect(self._apply_preset)
@@ -56,7 +61,7 @@ class StyleDialog(QDialog):
         self.font_name.setText(value.overall_font_name); self.font_size.setValue(value.overall_font_size)
         self.header_fill.setChecked(value.header_fill_enabled); self.header_color.setText(value.header_fill_color); self.header_font_color.setText(value.header_font_color); self.header_bold.setChecked(value.header_bold)
         self.border_enabled.setChecked(value.border_enabled); self.border_color.setText(value.border_color); self.border_style.setCurrentText(value.border_style)
-        self.gridlines.setChecked(value.show_gridlines); self.required_display.setCurrentText(value.required_display)
+        self.gridlines.setChecked(value.show_gridlines); self.freeze_mode.setCurrentIndex(max(0, self.freeze_mode.findData(value.freeze_mode))); self.auto_fit.setChecked(value.auto_fit); self.required_display.setCurrentText(value.required_display)
 
     def result_style(self) -> WorkbookStyleSchema:
         value = WorkbookStyleSchema(
@@ -64,7 +69,7 @@ class StyleDialog(QDialog):
             title_mode=self.title_mode.currentData(), show_main_title=self.title_mode.currentData() in {"template_name", "custom"}, main_title=self.title.text().strip() if self.title_mode.currentData() == "custom" else "", title_font_name=self.font_name.text().strip() or "宋体", title_font_size=self.title_size.value(), title_bold=self.title_bold.isChecked(), title_horizontal_alignment=self.title_align.currentText(), title_row_height=self.title_height.value(),
             header_fill_enabled=self.header_fill.isChecked(), header_fill_color=self.header_color.text().strip() or "FFFFFF", header_font_color=self.header_font_color.text().strip() or "000000", header_font_size=self.font_size.value(), header_bold=self.header_bold.isChecked(), header_horizontal_alignment=self.header_align.currentText(), header_row_height=self.header_height.value(), header_wrap_text=self.header_wrap.isChecked(),
             body_font_size=self.font_size.value(), body_horizontal_alignment=self.body_align.currentText(), body_row_height=self.body_height.value(), body_wrap_text=self.body_wrap.isChecked(),
-            border_enabled=self.border_enabled.isChecked(), border_color=self.border_color.text().strip() or "000000", border_style=self.border_style.currentText(), show_gridlines=self.gridlines.isChecked(), freeze_header=self.freeze.isChecked(), auto_filter=self.filter.isChecked(), default_column_width=self.default_width.value() or None, required_display=self.required_display.currentText(),
+            border_enabled=self.border_enabled.isChecked(), border_color=self.border_color.text().strip() or "000000", border_style=self.border_style.currentText(), show_gridlines=self.gridlines.isChecked(), freeze_mode=self.freeze_mode.currentData(), freeze_header=self.freeze_mode.currentData() == "header", auto_filter=self.filter.isChecked(), auto_fit=self.auto_fit.isChecked(), default_column_width=self.default_width.value() or None, required_display=self.required_display.currentText(),
         )
         value.validate()
         return value

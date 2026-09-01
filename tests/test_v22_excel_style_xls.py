@@ -46,7 +46,7 @@ def _master(tmp_path):
 
 def test_standard_office_style_and_optional_title_are_rendered_and_persisted(tmp_path):
     master = _master(tmp_path)
-    style = WorkbookStyleSchema(show_main_title=True, main_title="九月登记表", required_display="asterisk", default_column_width=16)
+    style = WorkbookStyleSchema(show_main_title=True, main_title="九月登记表", required_display="asterisk", default_column_width=16, freeze_mode="header")
     schema = TemplateSchema("样式表", sheets=[SheetSchema("录入", [FieldSchema("姓名", required=True, column_width=20), FieldSchema("备注")])], style=style)
     artifact = TemplateService(master, tmp_path / "templates").create(schema)
     restored = TemplateSchema.from_json(artifact.schema_path.read_text(encoding="utf-8"))
@@ -56,7 +56,7 @@ def test_standard_office_style_and_optional_title_are_rendered_and_persisted(tmp
     assert (sheet["A2"].value, sheet.freeze_panes, sheet.auto_filter.ref) == ("姓名*", "A3", None)
     assert sheet["A2"].fill.fgColor.rgb in {"00000000", "000000"} and sheet["A2"].font.bold
     assert sheet["A3"].border.left.style == "thin" and sheet.row_dimensions[3].height == 22
-    assert sheet.column_dimensions["A"].width == 20 and sheet.column_dimensions["B"].width == 16
+    assert sheet.column_dimensions["A"].width == 20 and sheet.column_dimensions["B"].width == 25
 
 
 def test_schema_without_style_and_ai_schema_use_safe_style_defaults(tmp_path):
@@ -82,7 +82,7 @@ def test_custom_style_font_height_wrap_required_and_copy_are_rendered(tmp_path):
     copied = service.copy(artifact.name)
     sheet = load_workbook(artifact.workbook_path)["登记"]
     assert (sheet["A1"].font.name, sheet["A1"].font.sz, sheet["A1"].fill.fgColor.rgb) == ("微软雅黑", 13, "004472C4")
-    assert (sheet.row_dimensions[1].height, sheet.row_dimensions[2].height, bool(sheet["A2"].alignment.wrap_text)) == (28, 25, False)
+    assert (sheet.row_dimensions[1].height, sheet.row_dimensions[2].height, bool(sheet["A2"].alignment.wrap_text)) == (56, 25, False)
     assert sheet["A2"].fill.fgColor.rgb == "00FFF2CC" and sheet["A2"].border.right.style == "thin"
     assert sheet.column_dimensions["B"].width > 20
     assert TemplateSchema.from_json(copied.schema_path.read_text(encoding="utf-8")).style == style

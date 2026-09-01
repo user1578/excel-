@@ -79,11 +79,8 @@ class ClassExportService:
                 value = self._column_value(definition, student, extras, row_index)
                 cell = sheet.cell(header_row + row_index, column_index, safe_excel_value(value))
                 renderer.style_body_cell(cell)
-            sheet.row_dimensions[header_row + row_index].height = renderer.style.body_row_height
+        renderer.size_table(sheet, header_row, header_row + 1, header_row + len(selected), [item.title for item in columns], [item.column_width for item in columns])
         renderer.configure_table(sheet, header_row, header_row + len(selected), len(columns))
-        for index, definition in enumerate(columns, 1):
-            width = definition.column_width or max(len(definition.title), *(len(str(self._column_value(definition, student, self.master.get_student_extra_fields(student.id) if student.id else {}, row + 1))) for row, student in enumerate(selected)), 8) + 2
-            renderer.set_column_width(sheet, index, definition.title, min(width, 35))
         self.exports_directory.mkdir(parents=True, exist_ok=True)
         output = self._unique_path(f"{self._safe_name(class_name)}_{self._safe_name(title) if title.strip() else '学生名单'}")
         workbook.save(output)
