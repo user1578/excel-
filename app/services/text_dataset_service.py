@@ -112,6 +112,11 @@ class TextDatasetService:
             key = detected.value if detected is not StandardField.OTHER else f"custom:{normalize_column_name(label) or label}"
             if key in columns:
                 key = f"custom:{normalize_column_name(label) or label}"
+            base_key = key
+            suffix = 2
+            while key in columns:
+                key = f"{base_key}__{suffix}"
+                suffix += 1
             columns.append(key)
             source_keys[label] = key
             column_labels[key] = label

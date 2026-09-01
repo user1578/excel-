@@ -129,3 +129,25 @@ class StudentRepository:
                 "DELETE FROM student_extra_fields WHERE student_id = ? AND field_key = ?", (student_id, field_key)
             )
             return cursor.rowcount == 1
+
+    def apply_extra_field_changes(
+        self,
+        student_id: int,
+        changes: list[tuple[str, str, str, str]],
+        deleted_keys: list[str],
+    ) -> None:
+        """同一事务中处理编辑、删除和重命名，避免旧 field_key 残留。"""
+        with self.database.transaction() as connection:
+            for old_key in deleted_keys:
+                connection.execute("DELETE FROM student_extra_fields WHERE student_id = ? AND field_key = ?", (student_id, old_key))
+            for field_name, field_key, field_value, old_key in changes:
+                if old_key and old_key != field_key:
+                    connection.execute("DELETE FROM student_extra_fields WHERE student_id = ? AND field_key = ?", (student_id, old_key))
+                connection.execute(
+                    """INSERT INTO student_extra_fields (student_id, field_name, field_key, field_value)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(student_id, field_key) DO UPDATE SET
+                        field_name=excluded.field_name, field_value=excluded.field_value,
+                        updated_at=STRFTIME('%Y-%m-%dT%H:%M:%fZ','now')""",
+                    (student_id, field_name, field_key, field_value),
+                )

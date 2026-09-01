@@ -169,3 +169,59 @@ def test_text_and_selected_class_dataset_fill_existing_template_without_changing
     class_dataset = ClassExportService(master).students_dataset(master.list_students_by_class("测试班2401"))
     class_result = WorkbookFillService(tmp_path / "class_exports").fill(analyzer, class_dataset, {"姓名": "name", "学号": "student_number", "班级": "class_name", "性别": "extra:性别"}, USE_NEW_VALUE)
     assert load_workbook(class_result.output_path)["报名"]["D2"].value == "测试性别"
+
+
+def test_master_import_reports_invalid_duplicate_rows_and_never_silently_skips(tmp_path):
+    master = service(tmp_path)
+    source = dataset()
+    source.rows.append(TableRow({"name": "", "student_number": "20260003", "class_name": "测试班2401"}, Provenance("缺失.xlsx", "资料", 9)))
+    source.rows.append(TableRow({"name": "冲突学生", "student_number": "20260001", "class_name": "其他班2401"}, Provenance("重复.xlsx", "资料", 10)))
+    preview = MasterDataImportService(master.students.database).preview(source)
+    assert preview.skipped_count == 2
+    assert {(item.source_file, item.source_sheet, item.source_row) for item in preview.skipped_records} == {("缺失.xlsx", "资料", 9), ("重复.xlsx", "资料", 10)}
+    assert "20260001" in preview.student_conflicts and "缺少必填字段" in preview.invalid_records[0].reason
+    MasterDataImportService(master.students.database).apply(source)
+    assert master.count_students() == 2
+
+
+def test_dormitory_correction_is_explicit_and_skip_does_not_write_unconfirmed_value(tmp_path):
+    master = service(tmp_path)
+    source = dataset()
+    importer = MasterDataImportService(master.students.database)
+    correction = {"无法解析寝室": ("测试7栋", "303")}
+    preview = importer.preview(source, correction)
+    assert not preview.pending_dormitories
+    importer.apply(source, correction)
+    assert master.get_student_by_number("20260002").dormitory == "测试7栋-303"
+    other = service(tmp_path / "skip")
+    MasterDataImportService(other.students.database).apply(dataset(), {"无法解析寝室": None})
+    assert other.get_student_by_number("20260002").dormitory is None
+
+
+def test_import_only_preserves_custom_student_fields_not_business_columns(tmp_path):
+    master = service(tmp_path)
+    source = dataset()
+    source.columns.extend(["sequence", "date", "course", "status", "building", "room_number", "custom:政治面貌"])
+    source.custom_fields.update({"sequence", "date", "course", "status", "building", "room_number", "custom:政治面貌"})
+    source.column_labels.update({"sequence": "序号", "date": "日期", "course": "课程", "status": "状态", "building": "楼栋", "room_number": "寝室号", "custom:政治面貌": "政治面貌"})
+    for row in source.rows:
+        row.values.update({"sequence": "1", "date": "2026-09-01", "course": "测试课程", "status": "正常", "building": "测试7栋", "room_number": "302", "custom:政治面貌": "测试身份"})
+    MasterDataImportService(master.students.database).apply(source)
+    fields = master.get_student_extra_fields(master.get_student_by_number("20260001").id)
+    assert set(fields) == {"性别", "政治面貌"}
+
+
+def test_renaming_extra_field_replaces_old_key_in_one_change(tmp_path):
+    master = service(tmp_path)
+    MasterDataImportService(master.students.database).apply(dataset())
+    student = master.get_student_by_number("20260001")
+    master.set_student_extra_field(student.id, "政治面貌", "测试身份")
+    master.apply_student_extra_field_changes(student.id, [("政治状态", "测试身份", "政治面貌")])
+    fields = master.get_student_extra_fields(student.id)
+    assert "政治面貌" not in fields and fields["政治状态"] == {"name": "政治状态", "value": "测试身份"}
+
+
+def test_custom_text_columns_with_same_normalized_key_keep_both_values():
+    result = TextDatasetService().parse_text("父亲-电话\t父亲 电话\n111\t222")
+    assert result.columns == ["custom:父亲电话", "custom:父亲电话__2"]
+    assert result.rows[0].values == {"custom:父亲电话": "111", "custom:父亲电话__2": "222"}

@@ -106,6 +106,20 @@ class MasterDataService:
     def delete_student_extra_field(self, student_id: int, field_key: str) -> bool:
         return self.students.delete_extra_field(student_id, field_key)
 
+    def apply_student_extra_field_changes(
+        self,
+        student_id: int,
+        changes: list[tuple[str, str, str]],
+        deleted_keys: list[str] | None = None,
+    ) -> None:
+        prepared: list[tuple[str, str, str, str]] = []
+        for field_name, field_value, old_key in changes:
+            field_key = normalize_column_name(field_name)
+            if not field_key:
+                raise ValueError("扩展字段名称不能为空")
+            prepared.append((field_name.strip(), field_key, field_value, old_key))
+        self.students.apply_extra_field_changes(student_id, prepared, deleted_keys or [])
+
     def search_students(self, keyword: str) -> list[Student]:
         return self.students.search(keyword) if keyword.strip() else self.list_students()
 

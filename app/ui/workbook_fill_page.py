@@ -118,9 +118,13 @@ class WorkbookFillPage(QWidget):
             text, _ = QFileDialog.getOpenFileName(self, "选择 TXT 数据源", "", "文本文件 (*.txt)")
             if not text: return
             try:
-                self.dataset = TextDatasetService().parse_file(text)
+                parsed = TextDatasetService().parse_file(text)
             except TextDatasetParseError as error:
                 QMessageBox.warning(self, "文本解析失败", str(error)); return
+            dialog = TextSourceDialog(TextDatasetService(), self, parsed)
+            if dialog.exec() != dialog.DialogCode.Accepted:
+                return
+            self.dataset = dialog.dataset
         else:
             text, _ = QFileDialog.getOpenFileName(self, "选择数据源", "", "资料文件 (*.xlsx *.csv)")
             if not text: return
@@ -179,9 +183,9 @@ class WorkbookFillPage(QWidget):
 
 class TextSourceDialog(QDialog):
     """本地解析后显示字段、行数与预览，确认前不改变页面数据源。"""
-    def __init__(self, parser: TextDatasetService, parent=None) -> None:
+    def __init__(self, parser: TextDatasetService, parent=None, initial_dataset: TableDataset | None = None) -> None:
         super().__init__(parent)
-        self.parser, self.dataset = parser, None
+        self.parser, self.dataset = parser, initial_dataset
         self.setWindowTitle("粘贴文本")
         self.resize(720, 520)
         layout = QVBoxLayout(self)
@@ -202,6 +206,8 @@ class TextSourceDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        if self.dataset is not None:
+            self._show_dataset()
 
     def parse(self) -> None:
         try:

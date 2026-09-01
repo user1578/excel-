@@ -114,13 +114,13 @@ class StudentDialog(QDialog):
             self._deleted_extra_keys.append(str(key))
         self.extra_table.removeRow(row)
 
-    def extra_fields(self) -> list[tuple[str, str]]:
-        values: list[tuple[str, str]] = []
+    def extra_fields(self) -> list[tuple[str, str, str]]:
+        values: list[tuple[str, str, str]] = []
         for row in range(self.extra_table.rowCount()):
             name = self.extra_table.item(row, 0).text().strip()
             value = self.extra_table.item(row, 1).text()
             if name:
-                values.append((name, value))
+                values.append((name, value, str(self.extra_table.item(row, 0).data(256) or "")))
         return values
 
     def deleted_extra_keys(self) -> list[str]:
