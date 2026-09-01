@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget, QMessageBox,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget, QMessageBox,
     QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -186,21 +186,36 @@ class MergePage(QWidget):
             QMessageBox.information(self, "没有可导入资料", "请先完成一次资料汇总。")
             return
         preview = self.master_import.preview(self.workspace.current_dataset)
+        corrections: dict[str, tuple[str, str] | None] = {}
+        if preview.pending_dormitories:
+            dialog = DormitoryResolutionDialog(preview.pending_dormitories, self)
+            if dialog.exec() != dialog.DialogCode.Accepted:
+                return
+            corrections = dialog.corrections()
+            preview = self.master_import.preview(self.workspace.current_dataset, corrections)
         details = (
             f"新增班级：{preview.new_classes}；已有班级：{preview.existing_classes}；班级冲突：{len(preview.class_conflicts)}\n"
             f"新增寝室：{preview.new_dormitories}；已有寝室：{preview.existing_dormitories}；待确认：{len(preview.pending_dormitories)}\n"
-            f"新增学生：{preview.new_students}；已有学生：{preview.existing_students}；可补全：{preview.updatable_students}；学生冲突：{len(preview.student_conflicts)}\n"
-            f"扩展字段：{preview.extra_field_count} 个\n\n"
+            f"新增学生：{preview.new_students}；已有学生：{preview.existing_students}；可补全：{preview.updatable_students}；学生冲突：{len(preview.student_conflicts)}；跳过：{preview.skipped_count}\n"
+            f"扩展字段：{preview.extra_field_count} 个\n"
+            f"跳过明细：{self._issue_summary(preview.skipped_records)}\n"
+            f"学生冲突明细：{self._issue_summary(preview.student_conflict_details)}\n\n"
             "仅补全已有学生的空字段；已有非空冲突不会覆盖。确认后才写入本机数据库。"
         )
         if QMessageBox.question(self, "导入基础库预览", details, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         try:
-            self.master_import.apply(self.workspace.current_dataset)
+            report = self.master_import.apply(self.workspace.current_dataset, corrections)
         except Exception as error:
             QMessageBox.critical(self, "导入失败", f"导入已回滚，未写入部分数据：{error}")
             return
-        QMessageBox.information(self, "导入完成", "基础库已按班级、寝室、学生顺序原子写入。待确认寝室与冲突项未自动覆盖。")
+        QMessageBox.information(self, "导入完成", f"基础库已按班级、寝室、学生顺序原子写入。跳过 {report.skipped_count} 行；待确认寝室与冲突项未自动覆盖。")
+
+    @staticmethod
+    def _issue_summary(issues) -> str:
+        if not issues:
+            return "无"
+        return "；".join(f"{item.source_file}/{item.source_sheet or 'CSV'}:{item.source_row}（{item.reason}）" for item in issues[:10])
 
     def resolve_selected(self, resolution: ConflictResolution) -> None:
         if self.result is None or self.conflicts.currentRow() < 0:
@@ -227,3 +242,38 @@ class MergePage(QWidget):
         except ValueError as error:
             QMessageBox.warning(self, "导出失败", str(error)); return
         QMessageBox.information(self, "导出完成", f"已另存到：\n{path}")
+
+
+class DormitoryResolutionDialog(QDialog):
+    """只收集用户明确填写的寝室修正；空白或勾选跳过都不会入库。"""
+    def __init__(self, raw_values: list[str], parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("确认待解析寝室")
+        self.resize(680, 360)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("以下寝室无法可靠解析。可填写楼栋、寝室号，或勾选跳过；系统不会猜测。"))
+        self.table = QTableWidget(len(raw_values), 4)
+        self.table.setHorizontalHeaderLabels(["原始寝室", "楼栋", "寝室号", "跳过"])
+        for row, raw in enumerate(raw_values):
+            item = QTableWidgetItem(raw); item.setFlags(item.flags() & ~item.flags().ItemIsEditable)
+            self.table.setItem(row, 0, item)
+            self.table.setItem(row, 1, QTableWidgetItem())
+            self.table.setItem(row, 2, QTableWidgetItem())
+            skip = QCheckBox("跳过")
+            self.table.setCellWidget(row, 3, skip)
+        layout.addWidget(self.table)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def corrections(self) -> dict[str, tuple[str, str] | None]:
+        result: dict[str, tuple[str, str] | None] = {}
+        for row in range(self.table.rowCount()):
+            raw = self.table.item(row, 0).text()
+            if self.table.cellWidget(row, 3).isChecked():
+                result[raw] = None
+                continue
+            building = self.table.item(row, 1).text().strip()
+            room = self.table.item(row, 2).text().strip()
+            result[raw] = (building, room) if building and room else None
+        return result

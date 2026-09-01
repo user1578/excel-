@@ -8,6 +8,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from app.models.class_record import ClassRecord
@@ -114,4 +115,25 @@ def test_v21_student_and_class_export_dialogs_smoke(application, tmp_path):
     export_dialog = ClassExportDialog(service, class_record.standard_name, [student])
     assert students_dialog.table.rowCount() == 1
     assert export_dialog.table.rowCount() >= 1
+    students_dialog.close(); export_dialog.close()
+
+
+def test_class_student_selection_survives_filtering_and_export_rows_are_dynamic(application, tmp_path):
+    database = DatabaseManager(tmp_path / "v211-dialogs.db")
+    database.initialize()
+    service = MasterDataService(database)
+    class_record = service.create_class(ClassRecord("测试班2401"))
+    first = service.create_student(Student("测试学生甲", "20260001", "测试班2401"))
+    second = service.create_student(Student("测试学生乙", "20260002", "测试班2401"))
+    students_dialog = ClassStudentsDialog(service, class_record)
+    students_dialog.table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
+    students_dialog.search.setText("乙")
+    students_dialog.search.clear()
+    assert [item.id for item in students_dialog.selected_students()] == [second.id]
+    export_dialog = ClassExportDialog(service, class_record.standard_name, [first, second])
+    original = [item.title for item in export_dialog.columns()]
+    export_dialog._move_action_row(export_dialog.table.cellWidget(4, 4), -1)
+    export_dialog._move_action_row(export_dialog.table.cellWidget(0, 4), 1)
+    export_dialog._remove_action_row(export_dialog.table.cellWidget(2, 4))
+    assert len(export_dialog.columns()) == len(original) - 1 and len({item.title for item in export_dialog.columns()}) == len(export_dialog.columns())
     students_dialog.close(); export_dialog.close()

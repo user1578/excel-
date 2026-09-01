@@ -98,8 +98,7 @@ class StudentPage(QWidget):
             return
         try:
             created = self.service.create_student(dialog.to_model())
-            for name, value in dialog.extra_fields():
-                self.service.set_student_extra_field(created.id, name, value)
+            self.service.apply_student_extra_field_changes(created.id, dialog.extra_fields())
         except DuplicateStudentNumberError as error:
             QMessageBox.warning(self, "学号重复", str(error))
             return
@@ -118,10 +117,7 @@ class StudentPage(QWidget):
             return
         try:
             self.service.update_student(student.id, dialog.to_model())
-            for field_key in dialog.deleted_extra_keys():
-                self.service.delete_student_extra_field(student.id, field_key)
-            for name, value in dialog.extra_fields():
-                self.service.set_student_extra_field(student.id, name, value)
+            self.service.apply_student_extra_field_changes(student.id, dialog.extra_fields(), dialog.deleted_extra_keys())
         except DuplicateStudentNumberError as error:
             QMessageBox.warning(self, "学号重复", str(error))
             return

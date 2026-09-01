@@ -23,6 +23,7 @@ class ClassStudentsDialog(QDialog):
         super().__init__(parent)
         self.service, self.class_record, self.workspace, self.open_fill = service, class_record, workspace, open_fill
         self.students = service.list_students_by_class(class_record.standard_name)
+        self._selected_ids = {student.id for student in self.students if student.id is not None}
         self.setWindowTitle(f"查看学生：{class_record.standard_name}")
         self.resize(820, 520)
         layout = QVBoxLayout(self)
@@ -51,12 +52,12 @@ class ClassStudentsDialog(QDialog):
         self.refresh()
 
     def refresh(self) -> None:
-        checked = {self.table.item(row, 1).data(256): self.table.item(row, 0).checkState() for row in range(self.table.rowCount())}
+        self._persist_visible_selection()
         keyword = self.search.text().strip()
         visible = [item for item in self.students if not keyword or keyword in " ".join(str(getattr(item, key) or "") for key in ("name", "student_number", "major", "dormitory"))]
         self.table.setRowCount(len(visible))
         for row, student in enumerate(visible):
-            pick = QTableWidgetItem(); pick.setCheckState(checked.get(student.id, Qt.CheckState.Checked))
+            pick = QTableWidgetItem(); pick.setCheckState(Qt.CheckState.Checked if student.id in self._selected_ids else Qt.CheckState.Unchecked)
             self.table.setItem(row, 0, pick)
             values = [student.name, student.student_number, student.major, student.grade, student.phone, student.dormitory]
             for column, value in enumerate(values, 1):
@@ -68,10 +69,19 @@ class ClassStudentsDialog(QDialog):
     def _set_visible_checked(self, state: bool) -> None:
         for row in range(self.table.rowCount()):
             self.table.item(row, 0).setCheckState(Qt.CheckState.Checked if state else Qt.CheckState.Unchecked)
+        self._persist_visible_selection()
+
+    def _persist_visible_selection(self) -> None:
+        for row in range(self.table.rowCount()):
+            student_id = self.table.item(row, 1).data(256)
+            if self.table.item(row, 0).checkState() == Qt.CheckState.Checked:
+                self._selected_ids.add(student_id)
+            else:
+                self._selected_ids.discard(student_id)
 
     def selected_students(self) -> list[Student]:
-        selected_ids = {self.table.item(row, 1).data(256) for row in range(self.table.rowCount()) if self.table.item(row, 0).checkState() == Qt.CheckState.Checked}
-        return [student for student in self.students if student.id in selected_ids]
+        self._persist_visible_selection()
+        return [student for student in self.students if student.id in self._selected_ids]
 
     def open_export(self) -> None:
         students = self.selected_students()
@@ -143,7 +153,9 @@ class ClassExportDialog(QDialog):
         self.table.setItem(row, 3, QTableWidgetItem(definition.fixed_value))
         actions = QWidget(); bar = QHBoxLayout(actions); bar.setContentsMargins(2, 1, 2, 1)
         up, down, remove = QPushButton("↑"), QPushButton("↓"), QPushButton("删除")
-        up.clicked.connect(lambda: self.move_row(row, -1)); down.clicked.connect(lambda: self.move_row(row, 1)); remove.clicked.connect(lambda: self.table.removeRow(row))
+        up.clicked.connect(lambda _checked=False, widget=actions: self._move_action_row(widget, -1))
+        down.clicked.connect(lambda _checked=False, widget=actions: self._move_action_row(widget, 1))
+        remove.clicked.connect(lambda _checked=False, widget=actions: self._remove_action_row(widget))
         for button in (up, down, remove): bar.addWidget(button)
         self.table.setCellWidget(row, 4, actions)
 
@@ -153,6 +165,22 @@ class ClassExportDialog(QDialog):
             definitions = self.columns(); definitions[row], definitions[target] = definitions[target], definitions[row]
             self.table.setRowCount(0)
             for item in definitions: self.add_column(item)
+
+    def _action_row(self, actions: QWidget) -> int:
+        for row in range(self.table.rowCount()):
+            if self.table.cellWidget(row, 4) is actions:
+                return row
+        return -1
+
+    def _move_action_row(self, actions: QWidget, delta: int) -> None:
+        row = self._action_row(actions)
+        if row >= 0:
+            self.move_row(row, delta)
+
+    def _remove_action_row(self, actions: QWidget) -> None:
+        row = self._action_row(actions)
+        if row >= 0:
+            self.table.removeRow(row)
 
     def columns(self) -> list[ExportColumn]:
         result: list[ExportColumn] = []
