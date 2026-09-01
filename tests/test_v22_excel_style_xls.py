@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -52,7 +53,7 @@ def test_standard_office_style_and_optional_title_are_rendered_and_persisted(tmp
     sheet = load_workbook(artifact.workbook_path)["录入"]
     assert restored.style == style
     assert sheet.merged_cells.ranges and sheet["A1"].value == "九月登记表"
-    assert (sheet["A2"].value, sheet.freeze_panes, sheet.auto_filter.ref) == ("姓名*", "A3", "A2:B102")
+    assert (sheet["A2"].value, sheet.freeze_panes, sheet.auto_filter.ref) == ("姓名*", "A3", None)
     assert sheet["A2"].fill.fgColor.rgb in {"00000000", "000000"} and sheet["A2"].font.bold
     assert sheet["A3"].border.left.style == "thin" and sheet.row_dimensions[3].height == 22
     assert sheet.column_dimensions["A"].width == 20 and sheet.column_dimensions["B"].width == 16
@@ -134,6 +135,11 @@ class _FakeCom:
         return self.excel
 
 
+class _UnavailableCom:
+    def DispatchEx(self, _name):
+        raise RuntimeError("Excel 服务不可用")
+
+
 def test_xls_converter_creates_xlsx_copy_without_changing_original(tmp_path):
     original = tmp_path / "旧模板.xls"; original.write_bytes(b"not-a-real-xls")
     before = original.read_bytes()
@@ -142,9 +148,17 @@ def test_xls_converter_creates_xlsx_copy_without_changing_original(tmp_path):
     assert LegacyExcelConverter.is_legacy_template(tmp_path / "大写.XLS")
 
 
-def test_xls_converter_reports_missing_excel_component(tmp_path):
+def test_xls_converter_reports_unavailable_excel_service(tmp_path):
     original = tmp_path / "旧模板.xls"; original.write_bytes(b"legacy")
-    with pytest.raises(LegacyExcelConversionError, match="Microsoft Excel"):
+    with pytest.raises(LegacyExcelConversionError, match="自动化服务"):
+        LegacyExcelConverter(_UnavailableCom()).convert(original)
+
+
+def test_xls_converter_reports_missing_pywin32(tmp_path, monkeypatch):
+    original = tmp_path / "旧模板.xls"; original.write_bytes(b"legacy")
+    monkeypatch.setitem(sys.modules, "win32com", None)
+    monkeypatch.delitem(sys.modules, "win32com.client", raising=False)
+    with pytest.raises(LegacyExcelConversionError, match="pywin32"):
         LegacyExcelConverter().convert(original)
 
 

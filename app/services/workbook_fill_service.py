@@ -19,6 +19,11 @@ from app.utils.value_normalizer import normalize_column_name
 KEEP_EXISTING = "keep"
 USE_NEW_VALUE = "overwrite"
 SKIP_CONFLICTING_ROW = "skip_row"
+AUTO_SEQUENCE = "__auto_sequence__"
+SEQUENCE_FILL_BLANK = "fill_blank"
+SEQUENCE_RENUMBER = "renumber"
+SEQUENCE_NONE = "none"
+EXPLICIT_SEQUENCE_TARGETS = {"序号", "序", "编号"}
 
 
 class MergedCellWriteError(ValueError):
@@ -34,6 +39,9 @@ class WorkbookFillService:
         source_by_label = {normalize_column_name(dataset.display_label(key)): key for key in dataset.columns}
         for target, _column in analysis.target_columns.items():
             normalized = normalize_column_name(target)
+            if normalized in EXPLICIT_SEQUENCE_TARGETS:
+                result[target] = AUTO_SEQUENCE
+                continue
             if normalized in source_by_label:
                 result[target] = source_by_label[normalized]
                 continue
@@ -43,21 +51,26 @@ class WorkbookFillService:
                     break
         return result
 
-    def preview(self, analysis: TemplateAnalysis, dataset: TableDataset, mappings: dict[str, str]) -> FillPreview:
+    def preview(self, analysis: TemplateAnalysis, dataset: TableDataset, mappings: dict[str, str], sequence_start: int = 1, sequence_mode: str = SEQUENCE_FILL_BLANK) -> FillPreview:
         self._validate_mappings(analysis, dataset, mappings)
+        sequence_target = self._sequence_target(mappings, sequence_mode)
+        self._validate_sequence(sequence_target, sequence_start, sequence_mode)
+        active_mappings = {target: source for target, source in mappings.items() if source != AUTO_SEQUENCE or sequence_target is not None}
         workbook = load_workbook(analysis.template_path, data_only=False)
         try:
             sheet = workbook[analysis.sheet_name]
-            warnings = self._merged_warnings(sheet, analysis, len(dataset.rows), mappings)
+            warnings = self._merged_warnings(sheet, analysis, len(dataset.rows), active_mappings)
             conflicts = 0
             data_start = analysis.header_row + 1
             for index, _row in enumerate(dataset.rows):
                 excel_row = data_start + index
                 for target in mappings:
+                    if mappings[target] == AUTO_SEQUENCE:
+                        continue
                     cell = sheet.cell(excel_row, analysis.target_columns[target])
                     if cell.value not in (None, ""):
                         conflicts += 1
-            return FillPreview(len(dataset.rows), dict(mappings), conflicts, warnings)
+            return FillPreview(len(dataset.rows), dict(mappings), conflicts, warnings, sequence_target, sequence_start if sequence_target else None, sequence_mode if sequence_target else SEQUENCE_NONE)
         finally:
             workbook.close()
 
@@ -67,23 +80,29 @@ class WorkbookFillService:
         dataset: TableDataset,
         mappings: dict[str, str],
         existing_value_strategy: str = KEEP_EXISTING,
+        sequence_start: int = 1,
+        sequence_mode: str = SEQUENCE_FILL_BLANK,
     ) -> FillResult:
         if existing_value_strategy not in {KEEP_EXISTING, USE_NEW_VALUE, SKIP_CONFLICTING_ROW}:
             raise ValueError("未知的模板已有值处理策略。")
         self._validate_mappings(analysis, dataset, mappings)
+        sequence_target = self._sequence_target(mappings, sequence_mode)
+        self._validate_sequence(sequence_target, sequence_start, sequence_mode)
+        active_mappings = {target: source for target, source in mappings.items() if source != AUTO_SEQUENCE or sequence_target is not None}
         workbook = load_workbook(analysis.template_path, data_only=False)
         try:
             sheet = workbook[analysis.sheet_name]
-            warnings = self._merged_warnings(sheet, analysis, len(dataset.rows), mappings)
+            warnings = self._merged_warnings(sheet, analysis, len(dataset.rows), active_mappings)
             if warnings:
                 raise MergedCellWriteError("；".join(warnings))
             data_start = analysis.header_row + 1
             written_rows = skipped_rows = preserved_cells = 0
+            next_sequence = sequence_start
             for offset, source_row in enumerate(dataset.rows):
                 row_number = data_start + offset
                 if row_number > data_start:
                     self._copy_template_row(sheet, data_start, row_number)
-                targets = [(target, analysis.target_columns[target], source_row.values.get(source_key, "")) for target, source_key in mappings.items()]
+                targets = [(target, analysis.target_columns[target], source_row.values.get(source_key, "")) for target, source_key in mappings.items() if source_key != AUTO_SEQUENCE]
                 existing = [sheet.cell(row_number, column).value not in (None, "") for _target, column, _value in targets]
                 if existing_value_strategy == SKIP_CONFLICTING_ROW and any(existing):
                     skipped_rows += 1
@@ -95,6 +114,12 @@ class WorkbookFillService:
                         continue
                     sheet.cell(row_number, column).value = safe_excel_value(value)
                     wrote = True
+                if sequence_target is not None:
+                    sequence_cell = sheet.cell(row_number, analysis.target_columns[sequence_target])
+                    if sequence_mode == SEQUENCE_RENUMBER or sequence_cell.value in (None, ""):
+                        sequence_cell.value = next_sequence
+                        wrote = True
+                    next_sequence += 1
                 if wrote:
                     written_rows += 1
             self.exports_directory.mkdir(parents=True, exist_ok=True)
@@ -110,9 +135,23 @@ class WorkbookFillService:
         if not mappings:
             raise ValueError("请至少配置一个字段映射。")
         unknown_targets = set(mappings) - set(analysis.target_columns)
-        unknown_sources = set(mappings.values()) - set(dataset.columns)
+        unknown_sources = set(mappings.values()) - set(dataset.columns) - {AUTO_SEQUENCE}
         if unknown_targets or unknown_sources:
             raise ValueError("字段映射包含不存在的模板字段或数据源字段。")
+
+    @staticmethod
+    def _sequence_target(mappings: dict[str, str], sequence_mode: str) -> str | None:
+        targets = [target for target, source in mappings.items() if source == AUTO_SEQUENCE]
+        if len(targets) > 1:
+            raise ValueError("一次填充只能指定一个自动序号目标列。")
+        return targets[0] if targets and sequence_mode != SEQUENCE_NONE else None
+
+    @staticmethod
+    def _validate_sequence(sequence_target: str | None, sequence_start: int, sequence_mode: str) -> None:
+        if sequence_mode not in {SEQUENCE_FILL_BLANK, SEQUENCE_RENUMBER, SEQUENCE_NONE}:
+            raise ValueError("序号处理方式不支持。")
+        if sequence_target is not None and not 1 <= sequence_start <= 999999:
+            raise ValueError("起始序号必须在 1 到 999999 之间。")
 
     @staticmethod
     def _copy_template_row(sheet, source_row: int, target_row: int) -> None:

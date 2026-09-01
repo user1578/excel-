@@ -21,6 +21,9 @@ class FillPreview:
     mappings: dict[str, str]
     existing_value_conflicts: int
     merged_cell_warnings: list[str]
+    sequence_target: str | None = None
+    sequence_start: int | None = None
+    sequence_mode: str = "none"
 
 
 @dataclass(frozen=True)
