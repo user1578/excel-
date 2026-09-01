@@ -19,14 +19,18 @@ from app.models.class_record import ClassRecord
 from app.services.master_data_service import ClassInUseError, DuplicateClassNameError, MasterDataService
 from app.ui.dialogs.alias_dialog import AliasDialog
 from app.ui.dialogs.class_dialog import ClassDialog
+from app.ui.dialogs.class_students_dialog import ClassStudentsDialog
+from app.services.data_workspace_service import DataWorkspaceService
 
 
 class ClassPage(QWidget):
     data_changed = Signal()
 
-    def __init__(self, service: MasterDataService, parent: QWidget | None = None) -> None:
+    def __init__(self, service: MasterDataService, workspace: DataWorkspaceService | None = None, open_fill=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.service = service
+        self.workspace = workspace
+        self.open_fill = open_fill
         self._classes: list[ClassRecord] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(36, 32, 36, 32)
@@ -154,18 +158,27 @@ class ClassPage(QWidget):
     def manage_aliases(self, class_record: ClassRecord) -> None:
         AliasDialog(self.service, class_record, self).exec()
 
+    def view_students(self, class_record: ClassRecord) -> None:
+        ClassStudentsDialog(self.service, class_record, self.workspace, self.open_fill, self).exec()
+
     def _create_actions(self, class_record: ClassRecord) -> QWidget:
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(4, 2, 4, 2)
         edit_button = QPushButton("编辑")
         alias_button = QPushButton("管理别名")
+        students_button = QPushButton("查看学生")
+        export_button = QPushButton("生成表格")
         delete_button = QPushButton("删除")
         edit_button.clicked.connect(lambda _checked=False, item=class_record: self.edit_class(item))
         alias_button.clicked.connect(lambda _checked=False, item=class_record: self.manage_aliases(item))
+        students_button.clicked.connect(lambda _checked=False, item=class_record: self.view_students(item))
+        export_button.clicked.connect(lambda _checked=False, item=class_record: self.view_students(item))
         delete_button.clicked.connect(lambda _checked=False, item=class_record: self.delete_class(item))
         layout.addWidget(edit_button)
         layout.addWidget(alias_button)
+        layout.addWidget(students_button)
+        layout.addWidget(export_button)
         layout.addWidget(delete_button)
         return container
 
