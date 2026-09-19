@@ -112,6 +112,9 @@ class DatasetMergeService:
 
     def _combine(self, result: MergeResult, record_index: int, incoming: TableRow) -> None:
         target = result.records[record_index]
+        target.match_status = "matched"
+        if record_index in result.unresolved_record_indexes:
+            result.unresolved_record_indexes.remove(record_index)
         for field, value in incoming.values.items():
             if value in (None, ""):
                 continue

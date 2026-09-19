@@ -62,3 +62,11 @@ class MergeResult:
     @property
     def resolved_conflicts(self) -> list[MergeConflict]:
         return [item for item in self.conflicts if item.is_resolved]
+
+    @property
+    def matched_count(self) -> int:
+        return sum(record.match_status == "matched" for record in self.records)
+
+    @property
+    def unmatched_count(self) -> int:
+        return sum(record.match_status == "unmatched" for record in self.records)

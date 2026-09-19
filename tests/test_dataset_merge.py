@@ -85,7 +85,7 @@ def test_conflicts_never_silently_overwrite_and_can_be_resolved():
     assert result.records[0].provenance["phone"].source_row == 0
 
 
-def test_export_requires_explicit_permission_for_unresolved_conflicts_and_escapes_user_text(tmp_path):
+def test_export_requires_explicit_permission_writes_to_requested_path_and_escapes_user_text(tmp_path):
     service = DatasetMergeService()
     result = service.merge_by_student([
         dataset("一.xlsx", ["name", "student_number", "custom:note"], [{"name": "测试学生甲", "student_number": "20260001", "custom:note": "=1+1"}]),
@@ -93,14 +93,28 @@ def test_export_requires_explicit_permission_for_unresolved_conflicts_and_escape
     ])
     exporter = MergeExportService(tmp_path / "exports")
     try:
-        exporter.export(result)
+        exporter.export(result, tmp_path / "用户选择" / "汇总.xlsx")
         raise AssertionError("未解决冲突不得静默导出")
     except ValueError:
         pass
-    path = exporter.export(result, allow_unresolved=True)
+    target = tmp_path / "用户选择" / "汇总.xlsx"
+    path = exporter.export(result, target, allow_unresolved=True)
     workbook = load_workbook(path, data_only=False)
+    assert path == target
     assert workbook.sheetnames[:2] == ["汇总结果", "汇总说明"]
     assert workbook["汇总结果"].cell(2, 3).value == "'=1+1"
+
+
+def test_later_student_match_replaces_initial_unmatched_status_in_statistics():
+    service = DatasetMergeService()
+    result = service.merge_by_student([
+        dataset("基础.xlsx", ["name", "class_name"], [{"name": "测试学生甲", "class_name": "测试班2401"}]),
+        dataset("补充.xlsx", ["name", "student_number", "class_name"], [{"name": "测试学生甲", "student_number": "20260001", "class_name": "测试班2401"}]),
+    ])
+
+    assert getattr(result, "unmatched_count", None) == 0
+    assert getattr(result, "matched_count", None) == 1
+    assert result.records[0].match_status == "matched"
 
 
 def test_analysis_preserves_custom_fields_dates_multiple_sheets_and_nonfirst_header(tmp_path):
