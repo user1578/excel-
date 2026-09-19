@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from app.models.class_record import ClassRecord
 from app.models.dormitory import Dormitory
@@ -22,6 +22,8 @@ from app.services.dataset_merge_service import DatasetMergeService
 from app.services.master_data_service import MasterDataService
 from app.ui.main_window import MainWindow
 from app.ui.dialogs.class_students_dialog import ClassExportDialog, ClassStudentsDialog
+from app.ui.merge_page import MergePage, SourceSelection
+from app.services.data_workspace_service import DataWorkspaceService
 
 
 @pytest.fixture(scope="session")
@@ -102,6 +104,80 @@ def test_conflict_resolution_refreshes_workspace_used_by_workbook_fill_page(appl
     assert window.data_workspace.current_dataset.rows[0].values["phone"] == "13900000001"
     assert window.workbook_fill_page.dataset.rows[0].values["phone"] == "13900000001"
     window.close()
+
+
+def _merge_page_with_result(application):
+    first = TableDataset(["name", "student_number", "class_name", "phone"], [
+        TableRow({"name": "测试学生甲", "student_number": "20260001", "class_name": "测试班2401", "phone": "13800000001"}, Provenance("基础.xlsx", "资料", 2)),
+        TableRow({"name": "测试学生乙", "student_number": "", "class_name": "测试班2401", "phone": ""}, Provenance("基础.xlsx", "资料", 3)),
+    ], "基础.xlsx", "资料", 1, column_labels={"name": "姓名", "student_number": "学号", "class_name": "班级", "phone": "电话"})
+    second = TableDataset(["name", "student_number", "class_name", "phone"], [
+        TableRow({"name": "测试学生甲", "student_number": "20260001", "class_name": "测试班2401", "phone": "13900000001"}, Provenance("补充.xlsx", "资料", 2)),
+        TableRow({"name": "测试学生丙", "student_number": "", "class_name": "测试班2401", "phone": ""}, Provenance("补充.xlsx", "资料", 3)),
+    ], "补充.xlsx", "资料", 1, column_labels={"name": "姓名", "student_number": "学号", "class_name": "班级", "phone": "电话"})
+    result = DatasetMergeService().merge_by_student([first, second])
+    workspace = DataWorkspaceService()
+    page = MergePage(workspace)
+    page.sources = [
+        SourceSelection(Path("基础.xlsx"), "资料", dataset=first),
+        SourceSelection(Path("补充.xlsx"), "资料", dataset=second),
+    ]
+    page.result = result
+    workspace.set_merge_result(result)
+    page._render_result()
+    return page, result, workspace
+
+
+def test_merge_export_cancel_does_not_call_service(application, monkeypatch):
+    page, _result, _workspace = _merge_page_with_result(application)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: ("", ""))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(page.export_service, "export", lambda *_args, **_kwargs: pytest.fail("取消时不得调用导出服务"))
+
+    page.export_result()
+
+    page.close()
+
+
+def test_merge_export_passes_user_selected_path(application, monkeypatch, tmp_path):
+    page, _result, _workspace = _merge_page_with_result(application)
+    target = tmp_path / "用户选择" / "汇总.xlsx"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(target), ""))
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+
+    def export(_result, output_path, allow_unresolved=False):
+        assert output_path == target
+        assert allow_unresolved is True
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fake workbook")
+        return target
+
+    monkeypatch.setattr(page.export_service, "export", export)
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+    page.export_result()
+
+    assert target.exists()
+    page.close()
+
+
+def test_merge_page_filters_rendered_rows_and_summary_without_mutating_result(application):
+    page, result, workspace = _merge_page_with_result(application)
+    assert hasattr(page, "filter_box")
+    assert page.preview.rowCount() == 3
+    assert page.summary_values["source_files"].text() == "2"
+    assert page.summary_values["raw_rows"].text() == "4"
+    assert page.summary_values["matched"].text() == "1"
+    assert page.summary_values["unmatched"].text() == "2"
+    assert page.summary_values["conflicts"].text() == "1"
+    assert page.summary_values["missing"].text() == "2"
+
+    original_rows = [dict(record.values) for record in result.records]
+    for key, expected_rows in (("conflicts", 1), ("missing", 2), ("unmatched", 2), ("all", 3)):
+        page.filter_box.setCurrentIndex(page.filter_box.findData(key))
+        assert page.preview.rowCount() == expected_rows
+        assert [dict(record.values) for record in result.records] == original_rows
+        assert workspace.current_merge_result is result
+    page.close()
 
 
 def test_v21_student_and_class_export_dialogs_smoke(application, tmp_path):
