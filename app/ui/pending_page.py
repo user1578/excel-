@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QInputDialog
 
+from app.models.pending_resolution import PendingResolutionOutcome
 from app.services.import_service import ImportService, PendingResolutionError
 from app.services.master_data_service import MasterDataService
 
@@ -64,26 +65,26 @@ class PendingPage(QWidget):
         student_id = students[labels.index(choice)].id
         pending_id = int(self.table.item(row, 0).text())
         try:
-            attendance_id = self.service.resolve_and_import(pending_id, student_id)
+            result = self.service.resolve_and_import(pending_id, student_id)
         except PendingResolutionError as error:
-            if "可能重复" in str(error):
-                confirm = QMessageBox.question(
-                    self,
-                    "可能重复记录",
-                    "重新查重发现可能重复。确认后仍将写入一条考勤记录，是否继续？",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                )
-                if confirm == QMessageBox.StandardButton.Yes:
-                    try:
-                        attendance_id = self.service.resolve_and_import(pending_id, student_id, confirm_possible_duplicate=True)
-                    except PendingResolutionError as repeated_error:
-                        QMessageBox.warning(self, "解决失败", str(repeated_error))
-                        return
-                else:
-                    return
-            else:
+            QMessageBox.warning(self, "解决失败", str(error))
+            return
+        if result.outcome is PendingResolutionOutcome.POSSIBLE_DUPLICATE_REQUIRES_CONFIRMATION:
+            confirm = QMessageBox.question(
+                self,
+                "可能重复记录",
+                result.message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                result = self.service.resolve_and_import(pending_id, student_id, confirm_possible_duplicate=True)
+            except PendingResolutionError as error:
                 QMessageBox.warning(self, "解决失败", str(error))
                 return
-        message = "发现完全重复，未写入正式考勤记录。" if attendance_id is None else "已写入正式考勤记录。"
-        QMessageBox.information(self, "已解决", message)
+        if result.outcome is PendingResolutionOutcome.EXACT_DUPLICATE_SKIPPED:
+            QMessageBox.information(self, "已解决", result.message)
+        elif result.outcome is PendingResolutionOutcome.IMPORTED:
+            QMessageBox.information(self, "已解决", result.message)
         self.refresh()

@@ -11,6 +11,7 @@ from typing import Callable
 
 from app.models.field_mapping import DetectedField, StandardField
 from app.models.import_session import ImportSession
+from app.models.pending_resolution import PendingResolutionOutcome, PendingResolutionResult
 from app.models.parsed_record import ParsedRecord
 from app.parsers.excel_reader import list_sheets, read_raw_with_context
 from app.parsers.field_detector import detect_field
@@ -202,7 +203,7 @@ class ImportService:
         student_id: int | None = None,
         resolution_note: str = "人工确认后导入",
         confirm_possible_duplicate: bool = False,
-    ) -> int | None:
+    ) -> PendingResolutionResult:
         """人工确认单条待处理状态后写入正式考勤记录，并标记该待确认项已解决。"""
         with self.database.transaction() as connection:
             pending = self.repository.get_pending(pending_id, connection)
@@ -224,18 +225,22 @@ class ImportService:
             values = self._attendance_values(int(pending["task_id"]), int(pending["source_file_id"]), record, entry)
             duplicate_kind = self.repository.find_record_duplicate(connection, values)
             if duplicate_kind == "EXACT_DUPLICATE":
+                message = "人工确认后发现正式记录已存在，完全重复未再次导入。"
                 self.repository.resolve_pending(connection, pending_id, {
-                    "action": "skipped_exact_duplicate", "note": resolution_note, "student_id": student_id,
+                    "action": "skipped_exact_duplicate", "note": resolution_note, "message": message, "student_id": student_id,
                 })
-                return None
+                return PendingResolutionResult(PendingResolutionOutcome.EXACT_DUPLICATE_SKIPPED, message=message)
             if duplicate_kind == "POSSIBLE_DUPLICATE" and not confirm_possible_duplicate:
-                raise PendingResolutionError("重新查重发现可能重复记录，请进行二次明确确认后再导入。")
+                return PendingResolutionResult(
+                    PendingResolutionOutcome.POSSIBLE_DUPLICATE_REQUIRES_CONFIRMATION,
+                    message="重新查重发现可能重复记录，请进行二次明确确认后再导入。",
+                )
             attendance_id = self.repository.create_attendance(connection, values)
             self.repository.resolve_pending(connection, pending_id, {
                 "action": "imported_after_possible_duplicate_confirmation" if duplicate_kind else "imported",
                 "note": resolution_note, "student_id": student_id, "attendance_record_id": attendance_id,
             })
-            return attendance_id
+            return PendingResolutionResult(PendingResolutionOutcome.IMPORTED, attendance_id, "已写入正式考勤记录。")
 
     @staticmethod
     def _sha256(path: Path) -> str:

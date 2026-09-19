@@ -155,6 +155,19 @@ def test_student_detail_export_and_no_data_error(statistics_setup):
         exporter.export_summaries(AttendanceQuery(start_date="2030-01-01", end_date="2030-01-31"))
 
 
+@pytest.mark.parametrize("unsafe", ["=SUM(A1:A2)", "+CMD", "@value"])
+def test_student_detail_export_escapes_user_formula_prefixes(statistics_setup, unsafe):
+    service, exporter, _master, _tasks, students, september, _october = statistics_setup
+    with service.repository.database.transaction() as connection:
+        connection.execute(
+            "UPDATE attendance_records SET course = ? WHERE task_id = ? AND student_id = ?",
+            (unsafe, september.id, students["张三"].id),
+        )
+
+    workbook = load_workbook(exporter.export_student_detail(AttendanceQuery(task_id=september.id), students["张三"].id, "张三"))
+    assert {cell.value for cell in workbook["学生明细"]["C"][1:]} == {"'" + unsafe}
+
+
 def test_statistics_page_smoke_can_query_switch_detail_and_export(statistics_setup, monkeypatch):
     service, exporter, master, tasks, _students, september, _october = statistics_setup
     application = QApplication.instance() or QApplication([])

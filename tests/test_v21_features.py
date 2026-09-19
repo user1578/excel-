@@ -148,6 +148,20 @@ def test_class_export_without_title_unique_paths_and_safe_values(tmp_path):
     assert first != second and sheet["A1"].value == "姓名" and sheet["B2"].value == "'=不执行" and sheet.freeze_panes is None
 
 
+@pytest.mark.parametrize("unsafe", ["=SUM(A1:A2)", "+CMD", "@value"])
+def test_class_export_escapes_user_formula_prefixes(tmp_path, unsafe):
+    master = service(tmp_path)
+    MasterDataImportService(master.students.database).apply(dataset())
+    students = master.list_students_by_class("测试班2401")
+    output = ClassExportService(master, tmp_path / "exports").export(
+        "测试班2401",
+        students,
+        [ExportColumn("备注", SOURCE_FIXED, fixed_value=unsafe)],
+    )
+
+    assert load_workbook(output)["学生名单"]["A2"].value == "'" + unsafe
+
+
 def test_unmatched_and_unresolved_records_are_both_counted_once():
     result = MergeResult(MergeMode.STUDENT, ["name"], {"name": "姓名"}, [
         MergedRecord({"name": "测试学生甲"}, match_status="unmatched"),

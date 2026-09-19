@@ -119,7 +119,9 @@ def test_pending_can_be_resolved_and_imported(import_service):
     assert (result.success_count, result.pending_count, result.conflict_count) == (0, 1, 1)
 
     pending = service.list_pending(task.id)[0]
-    attendance_id = service.resolve_and_import(pending["id"], master.get_student_by_number("20260001").id)
+    result = service.resolve_and_import(pending["id"], master.get_student_by_number("20260001").id)
+    attendance_id = getattr(result, "attendance_record_id", None)
+    assert attendance_id is not None
     with database.connection() as connection:
         status = connection.execute("SELECT status, student_id FROM attendance_records WHERE id = ?", (attendance_id,)).fetchone()
         resolved = connection.execute("SELECT status FROM pending_records WHERE id = ?", (pending["id"],)).fetchone()[0]
