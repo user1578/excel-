@@ -177,11 +177,11 @@ def test_text_and_selected_class_dataset_fill_existing_template_without_changing
     before = template.read_bytes()
     analyzer = WorkbookTemplateAnalyzer().analyze(template, "报名", 1)
     text_dataset = TextDatasetService().parse_text("姓名：测试学生甲\n学号：20260001\n班级：测试班2401\n\n姓名：测试学生乙\n学号：20260002\n班级：测试班2401")
-    text_result = WorkbookFillService(tmp_path / "text_exports").fill(analyzer, text_dataset, {"姓名": "name", "学号": "student_number", "班级": "class_name"}, USE_NEW_VALUE)
+    text_result = WorkbookFillService(tmp_path / "text_exports").fill(analyzer, text_dataset, {"姓名": "name", "学号": "student_number", "班级": "class_name"}, USE_NEW_VALUE, output_path=tmp_path / "文本填写.xlsx", compatibility_accepted=True)
     assert template.read_bytes() == before and load_workbook(text_result.output_path)["报名"]["A2"].value == "测试学生甲"
     master = service(tmp_path); MasterDataImportService(master.students.database).apply(dataset())
     class_dataset = ClassExportService(master).students_dataset(master.list_students_by_class("测试班2401"))
-    class_result = WorkbookFillService(tmp_path / "class_exports").fill(analyzer, class_dataset, {"姓名": "name", "学号": "student_number", "班级": "class_name", "性别": "extra:性别"}, USE_NEW_VALUE)
+    class_result = WorkbookFillService(tmp_path / "class_exports").fill(analyzer, class_dataset, {"姓名": "name", "学号": "student_number", "班级": "class_name", "性别": "extra:性别"}, USE_NEW_VALUE, output_path=tmp_path / "班级填写.xlsx", compatibility_accepted=True)
     assert load_workbook(class_result.output_path)["报名"]["D2"].value == "测试性别"
 
 
