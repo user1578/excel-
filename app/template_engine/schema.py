@@ -11,10 +11,10 @@ from app.models.field_mapping import FIELD_LABELS, StandardField
 from app.template_engine.styles import WorkbookStyleSchema, standard_office_style
 
 
-FIELD_TYPES = ("text", "integer", "decimal", "date", "percentage", "select", "name", "student_number", "class_name", "dormitory", "formula")
+FIELD_TYPES = ("text", "integer", "decimal", "date", "percentage", "select", "name", "student_number", "class_name", "dormitory", "photo", "formula")
 FIELD_TYPE_LABELS = {
     "text": "文本", "integer": "整数", "decimal": "小数", "date": "日期", "percentage": "百分比", "select": "下拉选项",
-    "name": "姓名", "student_number": "学号", "class_name": "班级", "dormitory": "寝室", "formula": "计算字段",
+    "name": "姓名", "student_number": "学号", "class_name": "班级", "dormitory": "寝室", "photo": "照片", "formula": "计算字段",
 }
 CORE_STANDARD_FIELDS = (StandardField.NAME.value, StandardField.STUDENT_NUMBER.value, StandardField.CLASS_NAME.value)
 INVALID_SHEET_CHARACTERS = re.compile(r"[\\/*?:\[\]]")

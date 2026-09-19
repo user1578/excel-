@@ -20,6 +20,7 @@ from app.services.workbook_fill_service import (
     MergedCellWriteError,
 )
 from app.utils.excel_safety import safe_excel_value
+from app.utils.excel_images import constrained_photo
 from app.utils.value_normalizer import normalize_text
 
 
@@ -211,20 +212,24 @@ class ExcelComService:
             if row_number > data_start:
                 self._copy_example_row(worksheet, data_start, row_number)
             targets = [
-                (target, analysis.target_columns[target], source_row.values.get(source_key, ""))
+                (target, analysis.target_columns[target], source_key, source_row.values.get(source_key, ""))
                 for target, source_key in mappings.items()
                 if source_key != AUTO_SEQUENCE
             ]
-            existing = [worksheet.Cells(row_number, column).Value not in (None, "") for _target, column, _value in targets]
+            existing = [worksheet.Cells(row_number, column).Value not in (None, "") for _target, column, _source, _value in targets]
             if strategy == SKIP_CONFLICTING_ROW and any(existing):
                 skipped_rows += 1
                 continue
             wrote = False
-            for (_target, column, value), has_existing in zip(targets, existing):
+            for (target, column, source_key, value), has_existing in zip(targets, existing):
                 if has_existing and strategy == KEEP_EXISTING:
                     preserved_cells += 1
                     continue
-                worksheet.Cells(row_number, column).Value = safe_excel_value(value)
+                cell = worksheet.Cells(row_number, column)
+                if source_key == "photo" and value not in (None, ""):
+                    self._insert_photo(worksheet, cell, value, target, row_number)
+                else:
+                    cell.Value = safe_excel_value(value)
                 wrote = True
             if sequence_target is not None:
                 cell = worksheet.Cells(row_number, analysis.target_columns[sequence_target])
@@ -235,6 +240,12 @@ class ExcelComService:
             if wrote:
                 written_rows += 1
         return written_rows, skipped_rows, preserved_cells
+
+    @staticmethod
+    def _insert_photo(worksheet, cell, value, field_name: str, row_number: int) -> None:
+        source, width, height = constrained_photo(value, cell.Width, cell.Height, field_name, row_number)
+        shape = worksheet.Shapes.AddPicture(str(source.resolve()), False, True, cell.Left, cell.Top, width, height)
+        shape.LockAspectRatio = True
 
     @staticmethod
     def _copy_example_row(worksheet, source_row: int, target_row: int) -> None:

@@ -28,3 +28,14 @@ class TemplateService:
 
     def delete(self, name: str) -> None:
         self.manager.delete(name)
+
+    def generate(self, schema: TemplateSchema, output_path: str | Path, prefill_rows: list[dict[str, object]] | None = None) -> Path:
+        """保留内部可管理模板，并向用户选择的位置另存预填副本。"""
+        self.create(schema)
+        return self.manager.generator.generate(
+            schema,
+            Path(output_path),
+            [item.standard_name for item in self.master.list_classes()],
+            [item.standard_name for item in self.master.list_dormitories()],
+            prefill_rows,
+        )

@@ -108,6 +108,18 @@ def test_template_manager_load_copy_delete_and_does_not_overwrite(template_setup
     assert not copied.directory.exists()
 
 
+def test_external_generation_keeps_managed_artifact_and_prefills_requested_path(template_setup):
+    service, tmp_path = template_setup
+    output = tmp_path / "用户选择" / "外部模板.xlsx"
+
+    result = service.generate(classroom_schema(), output, prefill_rows=[{"name": "=测试学生"}])
+
+    artifact = service.list()[0]
+    assert result == output and output.exists()
+    assert artifact.workbook_path != output and artifact.workbook_path.is_file()
+    assert load_workbook(output)["数据录入"]["A2"].value == "'=测试学生"
+
+
 class FakeClient:
     def __init__(self, response=None, error=None): self.response, self.error = response, error
     def request_template_json(self, _requirement):

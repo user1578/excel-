@@ -13,6 +13,7 @@ from app.models.table_dataset import TableDataset
 from app.parsers.field_detector import ALIASES
 from app.services.atomic_workbook_output import AtomicFileOutput
 from app.utils.excel_safety import safe_excel_value
+from app.utils.excel_images import insert_limited_photo
 from app.utils.value_normalizer import normalize_column_name
 
 
@@ -121,17 +122,21 @@ class WorkbookFillService:
             row_number = data_start + offset
             if row_number > data_start:
                 self._copy_template_row(sheet, data_start, row_number)
-            targets = [(target, analysis.target_columns[target], source_row.values.get(source_key, "")) for target, source_key in mappings.items() if source_key != AUTO_SEQUENCE]
-            existing = [sheet.cell(row_number, column).value not in (None, "") for _target, column, _value in targets]
+            targets = [(target, analysis.target_columns[target], source_key, source_row.values.get(source_key, "")) for target, source_key in mappings.items() if source_key != AUTO_SEQUENCE]
+            existing = [sheet.cell(row_number, column).value not in (None, "") for _target, column, _source, _value in targets]
             if existing_value_strategy == SKIP_CONFLICTING_ROW and any(existing):
                 skipped_rows += 1
                 continue
             wrote = False
-            for (_target, column, value), has_existing in zip(targets, existing):
+            for (target, column, source_key, value), has_existing in zip(targets, existing):
                 if has_existing and existing_value_strategy == KEEP_EXISTING:
                     preserved_cells += 1
                     continue
-                sheet.cell(row_number, column).value = safe_excel_value(value)
+                cell = sheet.cell(row_number, column)
+                if source_key == "photo" and value not in (None, ""):
+                    insert_limited_photo(sheet, cell, value, target, row_number)
+                else:
+                    cell.value = safe_excel_value(value)
                 wrote = True
             if sequence_target is not None:
                 sequence_cell = sheet.cell(row_number, analysis.target_columns[sequence_target])
