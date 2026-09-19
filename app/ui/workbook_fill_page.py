@@ -10,13 +10,12 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.table_dataset import Provenance, TableDataset, TableRow
-from app.parsers.workbook_template_analyzer import WorkbookTemplateAnalyzer
 from app.services.data_workspace_service import DataWorkspaceService
 from app.services.table_analysis_service import TableAnalysisService
-from app.services.workbook_fill_service import AUTO_SEQUENCE, KEEP_EXISTING, SEQUENCE_FILL_BLANK, SEQUENCE_NONE, SEQUENCE_RENUMBER, SKIP_CONFLICTING_ROW, USE_NEW_VALUE, WorkbookFillService
+from app.services.workbook_fill_service import AUTO_SEQUENCE, KEEP_EXISTING, SEQUENCE_FILL_BLANK, SEQUENCE_NONE, SEQUENCE_RENUMBER, SKIP_CONFLICTING_ROW, USE_NEW_VALUE
 from app.services.class_export_service import ClassExportService
-from app.services.legacy_excel_converter import LegacyExcelConversionError, LegacyExcelConverter
 from app.services.text_dataset_service import TextDatasetParseError, TextDatasetService
+from app.services.workbook_fill_coordinator import WorkbookFillCoordinator, WorkbookFormatPreservationError
 from app.ai.deepseek_client import DeepSeekClient, DeepSeekClientError, DeepSeekConfig
 
 
@@ -25,12 +24,11 @@ class WorkbookFillPage(QWidget):
         super().__init__(parent)
         self.workspace = workspace
         self.master = master
-        self.template_analyzer = WorkbookTemplateAnalyzer()
         self.table_analyzer = TableAnalysisService()
-        self.fill_service = WorkbookFillService()
-        self.legacy_converter = LegacyExcelConverter()
+        self.coordinator = WorkbookFillCoordinator()
         self.template_path: Path | None = None
         self.original_template_path: Path | None = None
+        self.compatibility_accepted = False
         self.analysis = None
         self.dataset: TableDataset | None = None
         self._build()
@@ -39,7 +37,7 @@ class WorkbookFillPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(36, 32, 36, 32)
         layout.addWidget(QLabel("表格填充", objectName="pageTitle"))
-        layout.addWidget(QLabel("支持 .xlsx 和旧版 .xls 模板；.xls 仅转换为临时 .xlsx 工作副本，原模板始终不改动。用户文本会安全转义，程序公式保持为公式。"))
+        layout.addWidget(QLabel("优先使用 Microsoft Excel 原格式填写 .xls/.xlsx/.xlsm；无 Excel 时仅可在明确同意后兼容填写 .xlsx。用户文本会安全转义，原模板始终不改动。"))
         template_bar = QHBoxLayout()
         choose = QPushButton("选择模板")
         choose.clicked.connect(self.choose_template)
@@ -86,21 +84,30 @@ class WorkbookFillPage(QWidget):
         layout.addWidget(self.message)
 
     def choose_template(self) -> None:
-        text, _ = QFileDialog.getOpenFileName(self, "选择 Excel 模板", "", "Excel 模板 (*.xlsx *.xls)")
+        text, _ = QFileDialog.getOpenFileName(self, "选择 Excel 模板", "", "Excel 模板 (*.xlsx *.xls *.xlsm)")
         if not text: return
         original = Path(text)
+        compatibility_accepted = False
         try:
-            working_copy = self.legacy_converter.convert(original) if self.legacy_converter.is_legacy_template(original) else original
-        except LegacyExcelConversionError as error:
-            QMessageBox.warning(self, "旧版模板不可用", str(error)); return
-        self.template_path = working_copy
-        self.original_template_path = original
-        try:
-            sheets = self.template_analyzer.sheets(self.template_path)
-        except ValueError as error:
+            if original.suffix.lower() == ".xlsx" and not self.coordinator.com_service.is_available():
+                answer = QMessageBox.question(
+                    self,
+                    "确认兼容模式",
+                    "当前未检测到 Microsoft Excel。openpyxl 兼容模式无法保证保留任意高级 Office 对象；是否仅对此次 .xlsx 填写明确接受兼容模式？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+                compatibility_accepted = True
+            sheets = self.coordinator.list_sheets(original, compatibility_accepted)
+        except (ValueError, WorkbookFormatPreservationError) as error:
             self.template_path = self.original_template_path = None
             QMessageBox.warning(self, "模板不可用", str(error)); return
-        self.template_label.setText(original.name + ("（已安全转换为临时 .xlsx 副本）" if working_copy != original else ""))
+        self.template_path = self.original_template_path = original
+        self.compatibility_accepted = compatibility_accepted
+        engine_name = "openpyxl 兼容模式" if compatibility_accepted else "Microsoft Excel 高保真引擎"
+        self.template_label.setText(f"{original.name}（{engine_name}）")
         self.sheet_box.clear(); self.sheet_box.addItems(sheets)
         self.analysis = None
         self._update_sequence_state()
@@ -109,7 +116,12 @@ class WorkbookFillPage(QWidget):
         if self.template_path is None or not self.sheet_box.currentText():
             QMessageBox.information(self, "请选择模板", "请先选择一个 Excel 模板。"); return
         try:
-            self.analysis = self.template_analyzer.analyze(self.template_path, self.sheet_box.currentText(), self.header_spin.value() or None)
+            self.analysis = self.coordinator.analyze(
+                self.template_path,
+                self.sheet_box.currentText(),
+                self.header_spin.value() or None,
+                compatibility_accepted=self.compatibility_accepted,
+            )
         except ValueError as error:
             QMessageBox.warning(self, "模板分析失败", str(error)); return
         explicit = self._detected_sequence_target()
@@ -163,7 +175,7 @@ class WorkbookFillPage(QWidget):
         self.mapping_table.setRowCount(0)
         if self.analysis is None or self.dataset is None:
             return
-        defaults = self.fill_service.default_mappings(self.analysis, self.dataset)
+        defaults = self.coordinator.default_mappings(self.analysis, self.dataset)
         for row, target in enumerate(self.analysis.target_columns):
             self.mapping_table.insertRow(row)
             self.mapping_table.setItem(row, 0, QTableWidgetItem(target))
@@ -217,7 +229,14 @@ class WorkbookFillPage(QWidget):
         if self.analysis is None or self.dataset is None:
             QMessageBox.information(self, "信息不完整", "请先分析模板并选择数据源。"); return
         try:
-            result = self.fill_service.preview(self.analysis, self.dataset, self._mappings(), self.sequence_start.value(), self.sequence_mode.currentData())
+            result = self.coordinator.preview(
+                self.analysis,
+                self.dataset,
+                self._mappings(),
+                self.sequence_start.value(),
+                self.sequence_mode.currentData(),
+                compatibility_accepted=self.compatibility_accepted,
+            )
         except ValueError as error:
             QMessageBox.warning(self, "无法预览", str(error)); return
         warning = f"；合并单元格风险 {len(result.merged_cell_warnings)} 项" if result.merged_cell_warnings else ""
@@ -227,11 +246,51 @@ class WorkbookFillPage(QWidget):
     def output(self) -> None:
         if self.analysis is None or self.dataset is None:
             QMessageBox.information(self, "信息不完整", "请先分析模板并选择数据源。"); return
+        merge_has_unresolved = self._merge_has_unresolved()
+        allow_unresolved_merge = False
+        if merge_has_unresolved:
+            answer = QMessageBox.question(
+                self,
+                "资料汇总尚未处理完",
+                "当前资料汇总仍有未解决冲突或身份歧义，默认不应进入正式填写。是否明确继续填写？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            allow_unresolved_merge = True
+        suggested = Path("exports") / f"{self.template_path.stem}_已填写{self.template_path.suffix}"
+        text, _ = QFileDialog.getSaveFileName(
+            self,
+            "另存填写结果",
+            str(suggested),
+            f"Excel 工作簿 (*{self.template_path.suffix})",
+        )
+        if not text:
+            return
         try:
-            result = self.fill_service.fill(self.analysis, self.dataset, self._mappings(), self.strategy_box.currentData(), self.sequence_start.value(), self.sequence_mode.currentData())
+            result = self.coordinator.fill(
+                self.analysis,
+                self.dataset,
+                self._mappings(),
+                self.strategy_box.currentData(),
+                self.sequence_start.value(),
+                self.sequence_mode.currentData(),
+                output_path=Path(text),
+                compatibility_accepted=self.compatibility_accepted,
+                merge_has_unresolved=merge_has_unresolved,
+                allow_unresolved_merge=allow_unresolved_merge,
+            )
         except ValueError as error:
             QMessageBox.warning(self, "填写失败", str(error)); return
-        QMessageBox.information(self, "填写完成", f"已另存到：\n{result.output_path}\n写入 {result.written_rows} 行，跳过 {result.skipped_rows} 行。")
+        confirmation = "；已按您的确认继续处理未解决汇总" if allow_unresolved_merge else ""
+        QMessageBox.information(self, "填写完成", f"已另存到：\n{result.output_path}\n引擎：{result.engine}；写入 {result.written_rows} 行，跳过 {result.skipped_rows} 行{confirmation}。")
+
+    def _merge_has_unresolved(self) -> bool:
+        result = self.workspace.current_merge_result
+        if result is None or self.dataset is not self.workspace.current_dataset:
+            return False
+        return bool(result.unresolved_conflicts or result.unresolved_record_indexes)
 
 
 class TextSourceDialog(QDialog):
