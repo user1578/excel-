@@ -53,7 +53,7 @@ class TableAnalysisService:
             values: dict[str, str] = {}
             for index, key in indexed_keys.items():
                 value = row[index] if index < len(row) else None
-                values[key] = normalize_date(value) if key == StandardField.DATE.value else normalize_text(value)
+                values[key] = normalize_date(value).value if key == StandardField.DATE.value else normalize_text(value)
             if any(values.values()):
                 rows.append(TableRow(values, Provenance(source.name, sheet_name, offset)))
         return TableDataset(columns, rows, source.name, sheet_name, detected_index + 1, mappings, labels, custom_fields)

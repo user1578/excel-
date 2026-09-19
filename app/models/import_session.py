@@ -5,6 +5,7 @@ from typing import Any
 import pandas as pd
 from app.models.field_mapping import DetectedField, StandardField
 from app.models.parsed_record import ParsedRecord
+from app.parsers.excel_reader import ExcelCellDateContext
 
 @dataclass
 class ImportSession:
@@ -18,6 +19,7 @@ class ImportSession:
     records: list[ParsedRecord] = field(default_factory=list)
     record_mode: str = "仅异常名单"
     error: str | None = None
+    date_context: dict[tuple[int, int], ExcelCellDateContext] = field(default_factory=dict)
 
     @property
     def headers(self) -> list[str]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime
 import math
 import re
@@ -16,6 +17,15 @@ _DATE_PATTERNS = (
 )
 
 
+@dataclass(frozen=True)
+class DateNormalization:
+    """日期标准化结果，保留无法可靠识别时的原始显示值。"""
+
+    value: str
+    is_valid: bool
+    reason: str | None = None
+
+
 def normalize_text(value: object) -> str:
     """将可显示值转成去除两端空白的文本，不将缺失值变成 ``nan``。"""
     if value is None:
@@ -25,51 +35,61 @@ def normalize_text(value: object) -> str:
     return str(value).strip()
 
 
-def normalize_date(value: Any) -> str:
+def normalize_date(
+    value: Any,
+    *,
+    date_semantic: bool = False,
+    excel_epoch: datetime | None = None,
+) -> DateNormalization:
     """将可可靠识别的日期转为 ISO 日期；未知格式保留原始文本。
 
     不猜测八位数字或模糊月日顺序，避免把用户数据改成错误日期。
     """
-    if value is None:
-        return ""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return DateNormalization("", True)
     if isinstance(value, datetime):
-        return value.date().isoformat()
+        return DateNormalization(value.date().isoformat(), True)
     if isinstance(value, date):
-        return value.isoformat()
+        return DateNormalization(value.isoformat(), True)
     isoformat = getattr(value, "isoformat", None)
     if callable(isoformat) and value.__class__.__module__.startswith("pandas"):
         try:
-            return value.date().isoformat()
+            return DateNormalization(value.date().isoformat(), True)
         except (AttributeError, TypeError, ValueError):
-            return normalize_text(value)
+            text = normalize_text(value)
+            return DateNormalization(text, not text, None if not text else "unrecognized_date")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if 1 <= value <= 100000:
+            if not (date_semantic and excel_epoch is not None):
+                return DateNormalization(normalize_text(value), False, "missing_date_semantics")
             try:
-                parsed = from_excel(value)
-                return (parsed.date() if isinstance(parsed, datetime) else parsed).isoformat()
+                parsed = from_excel(value, epoch=excel_epoch)
+                normalized = parsed.date() if isinstance(parsed, datetime) else parsed
+                if isinstance(normalized, date):
+                    return DateNormalization(normalized.isoformat(), True)
             except (TypeError, ValueError, OverflowError):
                 pass
-        return normalize_text(value)
+        return DateNormalization(normalize_text(value), False, "unrecognized_date")
     text = normalize_text(value)
     if not text:
-        return ""
+        return DateNormalization("", True)
     chinese = re.fullmatch(r"(\d{4})年(\d{1,2})月(\d{1,2})日(?:\s+.*)?", text)
     if chinese:
         try:
-            return date(*(int(part) for part in chinese.groups())).isoformat()
+            return DateNormalization(date(*(int(part) for part in chinese.groups())).isoformat(), True)
         except ValueError:
-            return text
+            return DateNormalization(text, False, "unrecognized_date")
     for pattern in _DATE_PATTERNS:
         try:
-            return datetime.strptime(text, pattern).date().isoformat()
+            return DateNormalization(datetime.strptime(text, pattern).date().isoformat(), True)
         except ValueError:
             continue
     if "T" in text and "-" in text:
         try:
-            return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+            return DateNormalization(datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat(), True)
         except ValueError:
             pass
-    return text
+    return DateNormalization(text, False, "unrecognized_date")
 
 
 def normalize_class_name(value: object) -> str:

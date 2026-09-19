@@ -44,7 +44,9 @@ def imported_service(tmp_path):
     ("not a date", "not a date"),
 ])
 def test_normalize_date_is_conservative(value, expected):
-    assert normalize_date(value) == expected
+    result = normalize_date(value)
+    assert getattr(result, "value", None) == expected
+    assert getattr(result, "is_valid", None) is (value not in {"20260930", "not a date"})
 
 
 def _source_and_pending(database, task, *, data, issue_type="学生信息冲突"):
@@ -124,3 +126,20 @@ def test_date_range_includes_normalized_imported_boundary(imported_service, tmp_
     with database.connection() as connection:
         assert connection.execute("SELECT date FROM attendance_records").fetchone()[0] == "2026-09-30"
     assert StatisticsService(database).summarize(AttendanceQuery(start_date="2026-09-30", end_date="2026-09-30")).overview["record_count"] == 1
+
+
+def test_numeric_date_without_context_stays_pending_after_student_matches(imported_service, tmp_path):
+    service, database, task, _student = imported_service
+    source = tmp_path / "虚构数字日期.csv"
+    source.write_text("姓名,学号,班级,日期,迟到\n测试学生甲,20260001,测试班2401,45200,是\n", encoding="utf-8-sig")
+
+    session = service.analyze(source)
+    session.record_mode = "仅异常名单"
+    service.apply_mappings(session, service.default_mapping(session), save=False)
+    result = service.import_session(task.id, session)
+
+    assert (result.success_count, result.pending_count) == (0, 1)
+    with database.connection() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM attendance_records").fetchone()[0] == 0
+        issue_type = connection.execute("SELECT issue_type FROM pending_records").fetchone()[0]
+    assert "INVALID_DATE" in issue_type
