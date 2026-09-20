@@ -17,6 +17,7 @@ from app.services.class_export_service import ClassExportService
 from app.services.text_dataset_service import TextDatasetParseError, TextDatasetService
 from app.services.workbook_fill_coordinator import WorkbookFillCoordinator, WorkbookFormatPreservationError
 from app.ai.deepseek_client import DeepSeekClient, DeepSeekClientError, DeepSeekConfig
+from app.ui.dialogs.student_selection_dialog import StudentSelectionDialog
 
 
 class WorkbookFillPage(QWidget):
@@ -50,7 +51,7 @@ class WorkbookFillPage(QWidget):
         layout.addLayout(template_bar)
         source_bar = QHBoxLayout()
         self.source_box = QComboBox()
-        self.source_box.addItems(["当前资料汇总结果", "单独选择 xlsx/csv", "学生库", "班级学生", "粘贴文本", "TXT 文件"])
+        self.source_box.addItems(["当前资料汇总结果", "单独选择 xlsx/csv", "学生库", "班级学生", "指定学生", "粘贴文本", "TXT 文件"])
         choose_source = QPushButton("选择数据源")
         choose_source.clicked.connect(self.choose_source)
         self.source_label = QLabel("尚未选择数据源")
@@ -142,6 +143,11 @@ class WorkbookFillPage(QWidget):
             if not accepted:
                 return
             self.dataset = ClassExportService(self.master).students_dataset(self.master.list_students_by_class(name), name)
+        elif choice == "指定学生":
+            dialog = StudentSelectionDialog(self.master, parent=self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            self.dataset = ClassExportService(self.master).students_dataset(dialog.selected_students(), "指定学生")
         elif choice == "粘贴文本":
             dialog = TextSourceDialog(TextDatasetService(), self)
             if dialog.exec() != dialog.DialogCode.Accepted:

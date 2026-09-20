@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
-from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -261,6 +261,7 @@ def test_template_page_smoke_manual_generation_and_ai_area(template_setup, monke
     page.fields.append(FieldSchema("备注")); page._render_fields()
     page.style = replace(page.style, title_mode="none")
     monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(tmp_path / "手动学生表.xlsx"), ""))
     page.generate_template()
     assert page.template_table.rowCount() == 1
     page.template_table.selectRow(0); page.open_selected()

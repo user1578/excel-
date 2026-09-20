@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
 
 from app.models.class_record import ClassRecord
 from app.models.dormitory import Dormitory
@@ -312,4 +312,25 @@ def test_fill_page_confirms_unresolved_merge_and_passes_flags(application, monke
         "merge_has_unresolved": True,
         "allow_unresolved_merge": True,
     }]
+    page.close()
+
+
+def test_fill_page_reuses_student_selection_dialog_for_selected_source(application, monkeypatch, tmp_path):
+    database = DatabaseManager(tmp_path / "selected-source.db")
+    database.initialize()
+    master = MasterDataService(database)
+    master.create_class(ClassRecord("测试班2401"))
+    student = master.create_student(Student("测试学生甲", "20260001", "测试班2401"))
+    page = WorkbookFillPage(DataWorkspaceService(), master)
+
+    class Dialog:
+        def __init__(self, *_args, **_kwargs): pass
+        def exec(self): return QDialog.DialogCode.Accepted
+        def selected_students(self): return [student]
+
+    monkeypatch.setattr("app.ui.workbook_fill_page.StudentSelectionDialog", Dialog)
+    page.source_box.setCurrentIndex(page.source_box.findText("指定学生"))
+    page.choose_source()
+
+    assert page.dataset is not None and page.dataset.rows[0].values["student_number"] == "20260001"
     page.close()
