@@ -19,6 +19,9 @@ from app.ui.dialogs.style_dialog import StyleDialog
 from app.ui.dialogs.student_selection_dialog import StudentSelectionDialog
 
 
+PREFILL_IDENTITY_FIELDS = (StandardField.NAME, StandardField.STUDENT_NUMBER, StandardField.CLASS_NAME)
+
+
 class FieldEditor(QDialog):
     def __init__(self, parent=None, field: FieldSchema | None = None):
         super().__init__(parent)
@@ -98,7 +101,10 @@ class TemplatePage(QWidget):
         self.style_auto_fit = QCheckBox(); self.style_auto_fit.setChecked(self.style.auto_fit)
         self.style_freeze = QCheckBox(); self.style_freeze.setChecked(self.style.freeze_header)
         self.style_filter = QCheckBox(); self.style_filter.setChecked(self.style.auto_filter)
-        style_form.addRow("预设", self.style_preset); style_form.addRow("字号", self.style_font_size); style_form.addRow("数据行高", self.style_row_height); style_form.addRow("自动列宽", self.style_auto_fit); style_form.addRow("冻结表头", self.style_freeze); style_form.addRow("自动筛选", self.style_filter)
+        self.style_header_alignment = self._alignment_box(self.style.header_horizontal_alignment)
+        self.style_body_alignment = self._alignment_box(self.style.body_horizontal_alignment)
+        self.style_border_enabled = QCheckBox(); self.style_border_enabled.setChecked(self.style.border_enabled)
+        style_form.addRow("预设", self.style_preset); style_form.addRow("字号", self.style_font_size); style_form.addRow("表头对齐", self.style_header_alignment); style_form.addRow("正文对齐", self.style_body_alignment); style_form.addRow("数据行高", self.style_row_height); style_form.addRow("边框", self.style_border_enabled); style_form.addRow("自动列宽", self.style_auto_fit); style_form.addRow("冻结表头", self.style_freeze); style_form.addRow("自动筛选", self.style_filter)
         layout.addLayout(style_form)
         self.style_preview = QTableWidget(2, 5)
         self.style_preview.setHorizontalHeaderLabels(["姓名", "学号", "班级", "日期", "备注"])
@@ -162,10 +168,21 @@ class TemplatePage(QWidget):
         index = self.style_preset.findData(self.style.preset)
         self.style_preset.setCurrentIndex(index if index >= 0 else self.style_preset.findData("自定义"))
         self.style_font_size.setValue(self.style.overall_font_size)
+        self.style_header_alignment.setCurrentIndex(max(0, self.style_header_alignment.findData(self.style.header_horizontal_alignment)))
+        self.style_body_alignment.setCurrentIndex(max(0, self.style_body_alignment.findData(self.style.body_horizontal_alignment)))
         self.style_row_height.setValue(int(self.style.body_row_height))
+        self.style_border_enabled.setChecked(self.style.border_enabled)
         self.style_auto_fit.setChecked(self.style.auto_fit)
         self.style_freeze.setChecked(self.style.freeze_header)
         self.style_filter.setChecked(self.style.auto_filter)
+
+    @staticmethod
+    def _alignment_box(value: str) -> QComboBox:
+        box = QComboBox()
+        for label, alignment in (("左对齐", "left"), ("居中", "center"), ("右对齐", "right")):
+            box.addItem(label, alignment)
+        box.setCurrentIndex(max(0, box.findData(value)))
+        return box
 
     def _student_related_changed(self, selected: bool):
         if selected:
@@ -199,6 +216,40 @@ class TemplatePage(QWidget):
             mode,
             class_name=self.class_box.currentData() if mode == "class" else None,
             student_ids=[student.id for student in self._selected_students if student.id is not None] if mode == "selected" else None,
+        )
+
+    def _confirm_missing_prefill_identity_fields(self) -> None:
+        if self.generation_mode.currentData() not in {"class", "selected"}:
+            return
+        added = []
+        for standard in PREFILL_IDENTITY_FIELDS:
+            if self._has_identity_field(standard):
+                continue
+            label = FIELD_LABELS[standard]
+            answer = QMessageBox.question(
+                self,
+                "添加身份字段",
+                f"当前模板没有‘{label}’字段，是否添加？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                added.append(core_field_schema(standard.value))
+        if added:
+            self.fields.extend(added)
+            self._render_fields()
+
+    def _has_identity_field(self, standard: StandardField) -> bool:
+        field_type = {
+            StandardField.NAME: "name",
+            StandardField.STUDENT_NUMBER: "student_number",
+            StandardField.CLASS_NAME: "class_name",
+        }[standard]
+        return any(
+            field.standard_field == standard.value
+            or field.field_type == field_type
+            or field.name == FIELD_LABELS[standard]
+            for field in self.fields
         )
 
     def add_standard(self):
@@ -236,6 +287,7 @@ class TemplatePage(QWidget):
         return TemplateSchema(self.name.text().strip(), self.student_related.isChecked(), self.description.text().strip() or None, self.rows.value(), [SheetSchema(self.sheet_name.text().strip(), list(self.fields))], self.style)
 
     def generate_template(self):
+        self._confirm_missing_prefill_identity_fields()
         self.style = self._style_from_panel()
         style = self._style_for_generation()
         if style is None:
@@ -262,7 +314,10 @@ class TemplatePage(QWidget):
             overall_font_size=self.style_font_size.value(),
             header_font_size=self.style_font_size.value(),
             body_font_size=self.style_font_size.value(),
+            header_horizontal_alignment=self.style_header_alignment.currentData(),
+            body_horizontal_alignment=self.style_body_alignment.currentData(),
             body_row_height=self.style_row_height.value(),
+            border_enabled=self.style_border_enabled.isChecked(),
             auto_fit=self.style_auto_fit.isChecked(),
             freeze_mode="header" if self.style_freeze.isChecked() else "none",
             freeze_header=self.style_freeze.isChecked(),

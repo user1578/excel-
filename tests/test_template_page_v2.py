@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QFileDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -16,6 +17,7 @@ from app.repositories.database import DatabaseManager
 from app.services.master_data_service import MasterDataService
 from app.services.template_service import TemplateService
 from app.template_engine.schema import FieldSchema, SheetSchema, TemplateSchema
+from app.template_engine.styles import WorkbookStyleSchema
 from app.ui.dialogs.student_selection_dialog import StudentSelectionDialog
 from app.ui.template_page import TemplatePage
 
@@ -56,6 +58,19 @@ def test_template_page_has_scrollable_style_panel_and_collapsed_ai(page_setup):
     assert page.ai_toggle.isChecked() is False
 
 
+def test_visible_style_controls_update_existing_workbook_style_schema(page_setup):
+    _application, page, _service, _first, _second = page_setup
+
+    page.style_header_alignment.setCurrentIndex(page.style_header_alignment.findData("left"))
+    page.style_body_alignment.setCurrentIndex(page.style_body_alignment.findData("right"))
+    page.style_border_enabled.setChecked(False)
+
+    style = page._style_from_panel()
+
+    assert isinstance(style, WorkbookStyleSchema)
+    assert (style.header_horizontal_alignment, style.body_horizontal_alignment, style.border_enabled) == ("left", "right", False)
+
+
 def test_selected_students_prefill_only_declared_fields(page_setup):
     _application, page, _service, student, _second = page_setup
     page.set_generation_mode("selected")
@@ -64,6 +79,80 @@ def test_selected_students_prefill_only_declared_fields(page_setup):
     rows = page.prefill_rows(schema_with("姓名", "学号"))
 
     assert rows == [{"name": student.name, "student_number": student.student_number}]
+
+
+def test_selected_prefill_asks_before_adding_missing_identity_fields(page_setup, monkeypatch, tmp_path):
+    _application, page, service, student, _second = page_setup
+    prompts, captured = [], {}
+    page.name.setText("指定名单")
+    page.fields = [FieldSchema("事项")]
+    page.set_generation_mode("selected")
+    page.set_selected_students([student])
+
+    def answer(_parent, _title, text, *_args):
+        prompts.append(text)
+        return QMessageBox.StandardButton.Yes if "姓名" in text else QMessageBox.StandardButton.No
+
+    def record_generate(schema, output, prefill_rows):
+        captured.update(schema=schema, output=Path(output), prefill_rows=prefill_rows)
+        return Path(output)
+
+    monkeypatch.setattr(QMessageBox, "question", answer)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(tmp_path / "指定名单.xlsx"), ""))
+    monkeypatch.setattr(service, "generate", record_generate)
+
+    page.generate_template()
+
+    assert prompts == [
+        "当前模板没有‘姓名’字段，是否添加？",
+        "当前模板没有‘学号’字段，是否添加？",
+        "当前模板没有‘班级’字段，是否添加？",
+    ]
+    assert [field.standard_field for field in captured["schema"].sheets[0].fields] == [None, "name"]
+    assert captured["prefill_rows"] == [{"name": student.name}]
+
+
+def test_class_prefill_keeps_missing_identity_fields_when_user_declines(page_setup, monkeypatch, tmp_path):
+    _application, page, service, _first, _second = page_setup
+    prompts, captured = [], {}
+    page.name.setText("班级名单")
+    page.fields = [FieldSchema("事项")]
+    page.set_generation_mode("class")
+
+    def answer(_parent, _title, text, *_args):
+        prompts.append(text)
+        return QMessageBox.StandardButton.No
+
+    def record_generate(schema, output, prefill_rows):
+        captured.update(schema=schema, output=Path(output), prefill_rows=prefill_rows)
+        return Path(output)
+
+    monkeypatch.setattr(QMessageBox, "question", answer)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(tmp_path / "班级名单.xlsx"), ""))
+    monkeypatch.setattr(service, "generate", record_generate)
+
+    page.generate_template()
+
+    assert prompts == [
+        "当前模板没有‘姓名’字段，是否添加？",
+        "当前模板没有‘学号’字段，是否添加？",
+        "当前模板没有‘班级’字段，是否添加？",
+    ]
+    assert [field.name for field in captured["schema"].sheets[0].fields] == ["事项"]
+    assert captured["prefill_rows"] == [{}, {}]
+
+
+def test_blank_generation_never_prompts_for_identity_fields(page_setup, monkeypatch):
+    _application, page, _service, _first, _second = page_setup
+    page.name.setText("空白模板")
+    page.fields = [FieldSchema("事项")]
+    page.set_generation_mode("blank")
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: pytest.fail("空白模板不得询问身份字段"))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: ("", ""))
+
+    page.generate_template()
 
 
 def test_class_prefill_includes_only_declared_student_attributes(page_setup):
