@@ -46,7 +46,7 @@ def main() -> int:
         QMessageBox.critical(None, "启动失败", f"无法初始化本地数据库。\n\n{error}")
         return 1
 
-    application = QApplication(sys.argv)
+    application = QApplication.instance() or QApplication(sys.argv)
     application.setApplicationName("Excel资料整理助手")
     application.setFont(QFont("Microsoft YaHei UI", 10))
     window = MainWindow(MasterDataService(database))

@@ -86,6 +86,18 @@ def test_all_navigation_pages_open_smoke(application, tmp_path):
     window.close()
 
 
+def test_main_window_builds_merge_fill_and_template_pages(application, tmp_path):
+    database = DatabaseManager(tmp_path / "v2-main-window.db")
+    database.initialize()
+    window = MainWindow(MasterDataService(database))
+
+    assert window.content_stack.indexOf(window.merge_page) >= 0
+    assert window.content_stack.indexOf(window.workbook_fill_page) >= 0
+    assert window.content_stack.indexOf(window.template_page) >= 0
+
+    window.close()
+
+
 def test_conflict_resolution_refreshes_workspace_used_by_workbook_fill_page(application, tmp_path):
     database = DatabaseManager(tmp_path / "workspace-smoke.db")
     database.initialize()
