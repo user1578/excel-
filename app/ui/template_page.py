@@ -6,8 +6,8 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QFileDialog, QMessageBox, QPushButton, QDoubleSpinBox, QInputDialog, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QFileDialog, QMessageBox, QPushButton, QDoubleSpinBox, QInputDialog, QScrollArea, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from app.ai.deepseek_parser import DeepSeekParser
@@ -62,21 +62,36 @@ class TemplatePage(QWidget):
         self._selected_students = []
         root = QVBoxLayout(self); root.setContentsMargins(36, 32, 36, 32)
         root.addWidget(QLabel("模板生成", objectName="pageTitle"))
+        self.template_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.template_splitter.setChildrenCollapsible(False)
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setWidget(self._build_editor())
-        root.addWidget(self.scroll_area, 1)
-        root.addWidget(self._build_management())
+        self.management_panel = self._build_management()
+        self.template_splitter.addWidget(self.scroll_area)
+        self.template_splitter.addWidget(self.management_panel)
+        self.template_splitter.setStretchFactor(0, 4)
+        self.template_splitter.setStretchFactor(1, 1)
+        self.template_splitter.setSizes([780, 180])
+        root.addWidget(self.template_splitter, 1)
         self.refresh()
 
     def _build_editor(self) -> QWidget:
         page = QWidget(); layout = QVBoxLayout(page)
-        form = QFormLayout()
+        layout.addWidget(QLabel("模板基本信息", objectName="sectionTitle"))
+        form = QGridLayout()
         self.name = QLineEdit(); self.sheet_name = QLineEdit("数据录入"); self.description = QLineEdit(); self.rows = QSpinBox(); self.rows.setRange(1, 10000); self.rows.setValue(100)
         self.student_related = QCheckBox("学生相关模板（默认补充姓名、学号、班级）")
         self.student_related.toggled.connect(self._student_related_changed)
-        form.addRow("模板名称", self.name); form.addRow("工作表名称", self.sheet_name); form.addRow("备注", self.description); form.addRow("预生成空白行数", self.rows); form.addRow("", self.student_related)
+        for index, (label, widget) in enumerate((
+            ("模板名称", self.name), ("工作表名称", self.sheet_name),
+            ("备注", self.description), ("预生成空白行数", self.rows),
+        )):
+            row, column = divmod(index, 2)
+            form.addWidget(QLabel(label), row, column * 2)
+            form.addWidget(widget, row, column * 2 + 1)
         layout.addLayout(form)
+        layout.addWidget(QLabel("生成数据方式", objectName="sectionTitle"))
         generation = QHBoxLayout()
         self.generation_mode = QComboBox()
         self.generation_mode.addItem("空白模板", "blank")
@@ -88,11 +103,13 @@ class TemplatePage(QWidget):
             self.class_box.addItem(item.standard_name, item.standard_name)
         self.select_students_button = QPushButton("选择学生")
         self.select_students_button.clicked.connect(self.select_students)
-        generation.addWidget(QLabel("生成数据方式")); generation.addWidget(self.generation_mode); generation.addWidget(self.class_box); generation.addWidget(self.select_students_button); generation.addStretch()
+        generation.addWidget(QLabel("方式")); generation.addWidget(self.generation_mode); generation.addWidget(self.class_box); generation.addWidget(self.select_students_button); generation.addStretch()
         layout.addLayout(generation)
         self._generation_mode_changed()
+        layout.addWidget(QLabel("预填选项", objectName="sectionTitle"))
+        layout.addWidget(self.student_related)
         layout.addWidget(QLabel("可见样式设置", objectName="sectionTitle"))
-        style_form = QFormLayout()
+        style_form = QGridLayout()
         self.style_preset = QComboBox()
         for label, preset in (("标准办公", "标准办公表格"), ("简洁名单", "极简表格"), ("数据录入", "商务蓝色"), ("自定义", "自定义")):
             self.style_preset.addItem(label, preset)
@@ -104,25 +121,38 @@ class TemplatePage(QWidget):
         self.style_header_alignment = self._alignment_box(self.style.header_horizontal_alignment)
         self.style_body_alignment = self._alignment_box(self.style.body_horizontal_alignment)
         self.style_border_enabled = QCheckBox(); self.style_border_enabled.setChecked(self.style.border_enabled)
-        style_form.addRow("预设", self.style_preset); style_form.addRow("字号", self.style_font_size); style_form.addRow("表头对齐", self.style_header_alignment); style_form.addRow("正文对齐", self.style_body_alignment); style_form.addRow("数据行高", self.style_row_height); style_form.addRow("边框", self.style_border_enabled); style_form.addRow("自动列宽", self.style_auto_fit); style_form.addRow("冻结表头", self.style_freeze); style_form.addRow("自动筛选", self.style_filter)
+        for index, (label, widget) in enumerate((
+            ("预设", self.style_preset), ("字号", self.style_font_size), ("表头对齐", self.style_header_alignment),
+            ("正文对齐", self.style_body_alignment), ("数据行高", self.style_row_height), ("边框", self.style_border_enabled),
+            ("自动列宽", self.style_auto_fit), ("冻结表头", self.style_freeze), ("自动筛选", self.style_filter),
+        )):
+            row, column = divmod(index, 3)
+            style_form.addWidget(QLabel(label), row, column * 2)
+            style_form.addWidget(widget, row, column * 2 + 1)
         layout.addLayout(style_form)
-        self.style_preview = QTableWidget(2, 5)
+        self.style_preview = QTableWidget(4, 5)
         self.style_preview.setHorizontalHeaderLabels(["姓名", "学号", "班级", "日期", "备注"])
-        for row, values in enumerate((("张三", "20260001", "软件2401", "2026-09-20", "示例"), ("李四", "20260002", "软件2401", "2026-09-21", ""))):
+        for row, values in enumerate((
+            ("张三", "20260001", "软件2401", "2026-09-20", "示例"),
+            ("李四", "20260002", "软件2401", "2026-09-21", ""),
+            ("王五", "20260003", "软件2401", "2026-09-22", "待填写"),
+            ("赵六", "20260004", "软件2401", "2026-09-23", ""),
+        )):
             for column, value in enumerate(values): self.style_preview.setItem(row, column, QTableWidgetItem(value))
-        self.style_preview.setMaximumHeight(115)
+        self.style_preview.setFixedHeight(190)
         layout.addWidget(self.style_preview)
         style_button = QPushButton("更多样式设置")
         style_button.clicked.connect(self.edit_style)
         layout.addWidget(style_button)
+        layout.addWidget(QLabel("字段设置", objectName="sectionTitle"))
         field_bar = QHBoxLayout(); self.standard_box = QComboBox()
         for standard in StandardField:
             if standard not in {StandardField.IGNORE, StandardField.OTHER, StandardField.SEQUENCE}: self.standard_box.addItem(FIELD_LABELS[standard], standard)
         add_standard = QPushButton("添加标准字段"); add_custom = QPushButton("新增自定义字段"); edit = QPushButton("编辑字段"); up = QPushButton("上移"); down = QPushButton("下移"); remove = QPushButton("删除")
         add_standard.clicked.connect(self.add_standard); add_custom.clicked.connect(self.add_custom); edit.clicked.connect(self.edit_field); up.clicked.connect(lambda: self.move_field(-1)); down.clicked.connect(lambda: self.move_field(1)); remove.clicked.connect(self.remove_field)
         field_bar.addWidget(self.standard_box); [field_bar.addWidget(button) for button in (add_standard, add_custom, edit, up, down, remove)]; field_bar.addStretch(); layout.addLayout(field_bar)
-        self.field_table = QTableWidget(0, 8); self.field_table.setHorizontalHeaderLabels(["字段名称", "类型", "必填", "默认值", "下拉选项", "公式", "列宽", "说明"]); self.field_table.horizontalHeader().setStretchLastSection(True); self.field_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); layout.addWidget(self.field_table, 1)
-        self.ai_toggle = QCheckBox("使用 AI 生成方案（默认收起）")
+        self.field_table = QTableWidget(0, 8); self.field_table.setHorizontalHeaderLabels(["字段名称", "类型", "必填", "默认值", "下拉选项", "公式", "列宽", "说明"]); self.field_table.horizontalHeader().setStretchLastSection(True); self.field_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.field_table.setMinimumHeight(280); layout.addWidget(self.field_table)
+        self.ai_toggle = QCheckBox("AI 生成方案（默认收起）")
         self.ai_toggle.setChecked(False)
         layout.addWidget(self.ai_toggle)
         self.ai_panel = QWidget()
@@ -144,10 +174,15 @@ class TemplatePage(QWidget):
         return page
 
     def _build_management(self) -> QWidget:
-        page = QWidget(); layout = QVBoxLayout(page); layout.addWidget(QLabel("已有模板", objectName="sectionTitle"))
-        self.template_table = QTableWidget(0, 2); self.template_table.setHorizontalHeaderLabels(["名称", "文件"]); self.template_table.horizontalHeader().setStretchLastSection(True); layout.addWidget(self.template_table, 1)
+        page = QWidget(); page.setMinimumHeight(145)
+        layout = QVBoxLayout(page); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(6); layout.addWidget(QLabel("已有模板", objectName="sectionTitle"))
+        self.management_actions_widget = QWidget(page)
+        actions = QHBoxLayout(self.management_actions_widget); actions.setContentsMargins(0, 0, 0, 0); actions.setSpacing(6)
         for label, callback in (("打开并编辑", self.open_selected), ("复制", self.copy_selected), ("删除", self.delete_selected), ("刷新", self.refresh)):
-            button = QPushButton(label); button.clicked.connect(callback); layout.addWidget(button)
+            button = QPushButton(label); button.setMaximumHeight(30); button.clicked.connect(callback); actions.addWidget(button)
+        actions.addStretch()
+        layout.addWidget(self.management_actions_widget)
+        self.template_table = QTableWidget(0, 2); self.template_table.setHorizontalHeaderLabels(["名称", "文件"]); self.template_table.horizontalHeader().setStretchLastSection(True); self.template_table.setMinimumHeight(80); layout.addWidget(self.template_table, 1)
         return page
 
     def refresh(self):

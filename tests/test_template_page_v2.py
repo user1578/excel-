@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton, QSplitter
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -54,8 +54,36 @@ def test_template_page_has_scrollable_style_panel_and_collapsed_ai(page_setup):
     _application, page, _service, _first, _second = page_setup
 
     assert page.scroll_area.widget() is not None
-    assert page.style_preview.rowCount() == 2
+    assert page.style_preview.rowCount() >= 3
     assert page.ai_toggle.isChecked() is False
+
+
+def test_template_page_prioritizes_editor_in_vertical_splitter(page_setup):
+    application, page, _service, _first, _second = page_setup
+    page.resize(1200, 1000)
+    page.show()
+    application.processEvents()
+
+    assert isinstance(page.template_splitter, QSplitter)
+    assert page.template_splitter.orientation() == Qt.Orientation.Vertical
+    assert page.template_splitter.widget(0) is page.scroll_area
+    assert page.template_splitter.widget(1) is page.management_panel
+    initial_sizes = page.template_splitter.sizes()
+    assert initial_sizes[0] > initial_sizes[1]
+    page.template_splitter.moveSplitter(initial_sizes[0] - 60, 1)
+    application.processEvents()
+    adjusted_sizes = page.template_splitter.sizes()
+    assert adjusted_sizes[0] < initial_sizes[0]
+    assert adjusted_sizes[1] > initial_sizes[1]
+    assert page.field_table.minimumHeight() >= 260
+    assert page.style_preview.minimumHeight() >= 180
+    assert page.style_preview.rowCount() >= 3
+    assert page.ai_toggle.isChecked() is False
+    assert page.ai_panel.isVisible() is False
+    assert page.management_actions_widget.height() <= 40
+    management_buttons = page.management_actions_widget.findChildren(QPushButton)
+    assert [button.text() for button in management_buttons] == ["打开并编辑", "复制", "删除", "刷新"]
+    assert len({button.geometry().y() for button in management_buttons}) == 1
 
 
 def test_visible_style_controls_update_existing_workbook_style_schema(page_setup):
