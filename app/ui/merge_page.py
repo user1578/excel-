@@ -80,6 +80,31 @@ class MergePage(QWidget):
         import_master.clicked.connect(self.import_master_data)
         action.addWidget(QLabel("模式")); action.addWidget(self.mode_box); action.addWidget(analyze); action.addWidget(merge); action.addWidget(export); action.addWidget(import_master); action.addStretch()
         layout.addLayout(action)
+        filter_bar = QHBoxLayout()
+        self.filter_box = QComboBox()
+        self.filter_box.addItem("全部", "all")
+        self.filter_box.addItem("有冲突", "conflicts")
+        self.filter_box.addItem("缺失信息", "missing")
+        self.filter_box.addItem("无法匹配", "unmatched")
+        self.filter_box.currentIndexChanged.connect(self._render_result)
+        filter_bar.addWidget(QLabel("预览筛选")); filter_bar.addWidget(self.filter_box); filter_bar.addStretch()
+        layout.addLayout(filter_bar)
+        self.summary_values: dict[str, QLabel] = {}
+        summary = QHBoxLayout()
+        for key, label in (
+            ("source_files", "来源文件"), ("raw_rows", "原始行数"), ("final_records", "最终人数"),
+            ("matched", "完整匹配"), ("unmatched", "无法匹配"), ("conflicts", "冲突数"), ("missing", "缺失信息"),
+        ):
+            card = QWidget()
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(8, 4, 8, 4)
+            card_layout.addWidget(QLabel(label))
+            value = QLabel("0")
+            self.summary_values[key] = value
+            card_layout.addWidget(value)
+            summary.addWidget(card)
+        summary.addStretch()
+        layout.addLayout(summary)
         self.message = QLabel("尚未添加来源文件。")
         layout.addWidget(self.message)
         self.preview = QTableWidget(0, 0)
@@ -168,9 +193,10 @@ class MergePage(QWidget):
     def _render_result(self) -> None:
         if self.result is None:
             return
-        self.preview.setColumnCount(len(self.result.columns)); self.preview.setRowCount(len(self.result.records))
+        visible_records = self._visible_records()
+        self.preview.setColumnCount(len(self.result.columns)); self.preview.setRowCount(len(visible_records))
         self.preview.setHorizontalHeaderLabels([self.result.column_labels[key] for key in self.result.columns])
-        for row, record in enumerate(self.result.records):
+        for row, record in enumerate(visible_records):
             for column, key in enumerate(self.result.columns):
                 self.preview.setItem(row, column, QTableWidgetItem(str(record.values.get(key, ""))))
         self.conflicts.setRowCount(len(self.result.conflicts))
@@ -178,8 +204,41 @@ class MergePage(QWidget):
             origin = f"{conflict.source_a.source_file}:{conflict.source_a.source_row} / {conflict.source_b.source_file}:{conflict.source_b.source_row}"
             values = [self.result.column_labels.get(conflict.field, conflict.field), conflict.value_a, conflict.value_b, origin, conflict.resolution.value]
             for column, value in enumerate(values): self.conflicts.setItem(row, column, QTableWidgetItem(str(value)))
-        unlinked = MergeExportService._unlinked_count(self.result)
-        self.message.setText(f"汇总 {len(self.result.records)} 行；未解决冲突 {len(self.result.unresolved_conflicts)} 个；未关联 {unlinked} 行。")
+        source_files = len(self.sources) or len(self.result.source_datasets)
+        raw_rows = sum(len(source.dataset.rows) for source in self.sources if source.dataset is not None)
+        missing = sum(self._has_missing(record) for record in self.result.records)
+        values = {
+            "source_files": source_files,
+            "raw_rows": raw_rows,
+            "final_records": len(self.result.records),
+            "matched": self.result.matched_count,
+            "unmatched": self.result.unmatched_count,
+            "conflicts": len(self.result.conflicts),
+            "missing": missing,
+        }
+        for key, value in values.items():
+            self.summary_values[key].setText(str(value))
+        self.message.setText(
+            f"来源 {source_files} 个、原始 {raw_rows} 行、最终 {len(self.result.records)} 人；"
+            f"完整匹配 {self.result.matched_count} 人、无法匹配 {self.result.unmatched_count} 人、"
+            f"冲突 {len(self.result.conflicts)} 个、缺失信息 {missing} 人。"
+        )
+
+    def _visible_records(self):
+        if self.result is None:
+            return []
+        selected = self.filter_box.currentData()
+        if selected == "conflicts":
+            indexes = {conflict.record_index for conflict in self.result.conflicts}
+            return [record for index, record in enumerate(self.result.records) if index in indexes]
+        if selected == "missing":
+            return [record for record in self.result.records if self._has_missing(record)]
+        if selected == "unmatched":
+            return [record for record in self.result.records if record.match_status == "unmatched"]
+        return list(self.result.records)
+
+    def _has_missing(self, record) -> bool:
+        return any(record.values.get(column) in (None, "") for column in self.result.columns)
 
     def import_master_data(self) -> None:
         if self.master_import is None or self.workspace.current_dataset is None:
@@ -232,13 +291,17 @@ class MergePage(QWidget):
     def export_result(self) -> None:
         if self.result is None:
             QMessageBox.information(self, "尚未汇总", "请先执行汇总并检查预览。"); return
+        suggested_path = self.export_service.exports_directory / "资料汇总.xlsx"
+        selected_path, _ = QFileDialog.getSaveFileName(self, "导出汇总结果", str(suggested_path), "Excel 工作簿 (*.xlsx)")
+        if not selected_path:
+            return
         allow = False
         if self.result.unresolved_conflicts:
             answer = QMessageBox.question(self, "存在未解决冲突", "未解决冲突将随冲突清单导出，确认继续吗？")
             if answer != QMessageBox.StandardButton.Yes: return
             allow = True
         try:
-            path = self.export_service.export(self.result, allow)
+            path = self.export_service.export(self.result, Path(selected_path), allow_unresolved=allow)
         except ValueError as error:
             QMessageBox.warning(self, "导出失败", str(error)); return
         QMessageBox.information(self, "导出完成", f"已另存到：\n{path}")

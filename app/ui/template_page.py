@@ -7,15 +7,19 @@ from dataclasses import replace
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QDoubleSpinBox, QInputDialog, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QFileDialog, QMessageBox, QPushButton, QDoubleSpinBox, QInputDialog, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from app.ai.deepseek_parser import DeepSeekParser
 from app.models.field_mapping import FIELD_LABELS, StandardField
 from app.services.template_service import TemplateService
 from app.template_engine.schema import FIELD_TYPE_LABELS, FIELD_TYPES, FieldSchema, SheetSchema, TemplateSchema, core_field_schema
-from app.template_engine.styles import standard_office_style
+from app.template_engine.styles import minimal_style, preset_style, standard_office_style
 from app.ui.dialogs.style_dialog import StyleDialog
+from app.ui.dialogs.student_selection_dialog import StudentSelectionDialog
+
+
+PREFILL_IDENTITY_FIELDS = (StandardField.NAME, StandardField.STUDENT_NUMBER, StandardField.CLASS_NAME)
 
 
 class FieldEditor(QDialog):
@@ -55,10 +59,14 @@ class TemplatePage(QWidget):
         self.service, self.parser = service, parser
         self.fields: list[FieldSchema] = []
         self.style = standard_office_style()
+        self._selected_students = []
         root = QVBoxLayout(self); root.setContentsMargins(36, 32, 36, 32)
         root.addWidget(QLabel("模板生成", objectName="pageTitle"))
-        splitter = QSplitter(); splitter.addWidget(self._build_editor()); splitter.addWidget(self._build_management()); splitter.setSizes([850, 330])
-        root.addWidget(splitter, 1)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setWidget(self._build_editor())
+        root.addWidget(self.scroll_area, 1)
+        root.addWidget(self._build_management())
         self.refresh()
 
     def _build_editor(self) -> QWidget:
@@ -69,7 +77,42 @@ class TemplatePage(QWidget):
         self.student_related.toggled.connect(self._student_related_changed)
         form.addRow("模板名称", self.name); form.addRow("工作表名称", self.sheet_name); form.addRow("备注", self.description); form.addRow("预生成空白行数", self.rows); form.addRow("", self.student_related)
         layout.addLayout(form)
-        style_button = QPushButton("表格样式（默认：标准办公表格）")
+        generation = QHBoxLayout()
+        self.generation_mode = QComboBox()
+        self.generation_mode.addItem("空白模板", "blank")
+        self.generation_mode.addItem("按班级预填", "class")
+        self.generation_mode.addItem("指定学生预填", "selected")
+        self.generation_mode.currentIndexChanged.connect(self._generation_mode_changed)
+        self.class_box = QComboBox()
+        for item in self.service.master.list_classes():
+            self.class_box.addItem(item.standard_name, item.standard_name)
+        self.select_students_button = QPushButton("选择学生")
+        self.select_students_button.clicked.connect(self.select_students)
+        generation.addWidget(QLabel("生成数据方式")); generation.addWidget(self.generation_mode); generation.addWidget(self.class_box); generation.addWidget(self.select_students_button); generation.addStretch()
+        layout.addLayout(generation)
+        self._generation_mode_changed()
+        layout.addWidget(QLabel("可见样式设置", objectName="sectionTitle"))
+        style_form = QFormLayout()
+        self.style_preset = QComboBox()
+        for label, preset in (("标准办公", "标准办公表格"), ("简洁名单", "极简表格"), ("数据录入", "商务蓝色"), ("自定义", "自定义")):
+            self.style_preset.addItem(label, preset)
+        self.style_font_size = QSpinBox(); self.style_font_size.setRange(6, 72); self.style_font_size.setValue(self.style.overall_font_size)
+        self.style_row_height = QSpinBox(); self.style_row_height.setRange(12, 120); self.style_row_height.setValue(int(self.style.body_row_height))
+        self.style_auto_fit = QCheckBox(); self.style_auto_fit.setChecked(self.style.auto_fit)
+        self.style_freeze = QCheckBox(); self.style_freeze.setChecked(self.style.freeze_header)
+        self.style_filter = QCheckBox(); self.style_filter.setChecked(self.style.auto_filter)
+        self.style_header_alignment = self._alignment_box(self.style.header_horizontal_alignment)
+        self.style_body_alignment = self._alignment_box(self.style.body_horizontal_alignment)
+        self.style_border_enabled = QCheckBox(); self.style_border_enabled.setChecked(self.style.border_enabled)
+        style_form.addRow("预设", self.style_preset); style_form.addRow("字号", self.style_font_size); style_form.addRow("表头对齐", self.style_header_alignment); style_form.addRow("正文对齐", self.style_body_alignment); style_form.addRow("数据行高", self.style_row_height); style_form.addRow("边框", self.style_border_enabled); style_form.addRow("自动列宽", self.style_auto_fit); style_form.addRow("冻结表头", self.style_freeze); style_form.addRow("自动筛选", self.style_filter)
+        layout.addLayout(style_form)
+        self.style_preview = QTableWidget(2, 5)
+        self.style_preview.setHorizontalHeaderLabels(["姓名", "学号", "班级", "日期", "备注"])
+        for row, values in enumerate((("张三", "20260001", "软件2401", "2026-09-20", "示例"), ("李四", "20260002", "软件2401", "2026-09-21", ""))):
+            for column, value in enumerate(values): self.style_preview.setItem(row, column, QTableWidgetItem(value))
+        self.style_preview.setMaximumHeight(115)
+        layout.addWidget(self.style_preview)
+        style_button = QPushButton("更多样式设置")
         style_button.clicked.connect(self.edit_style)
         layout.addWidget(style_button)
         field_bar = QHBoxLayout(); self.standard_box = QComboBox()
@@ -79,15 +122,24 @@ class TemplatePage(QWidget):
         add_standard.clicked.connect(self.add_standard); add_custom.clicked.connect(self.add_custom); edit.clicked.connect(self.edit_field); up.clicked.connect(lambda: self.move_field(-1)); down.clicked.connect(lambda: self.move_field(1)); remove.clicked.connect(self.remove_field)
         field_bar.addWidget(self.standard_box); [field_bar.addWidget(button) for button in (add_standard, add_custom, edit, up, down, remove)]; field_bar.addStretch(); layout.addLayout(field_bar)
         self.field_table = QTableWidget(0, 8); self.field_table.setHorizontalHeaderLabels(["字段名称", "类型", "必填", "默认值", "下拉选项", "公式", "列宽", "说明"]); self.field_table.horizontalHeader().setStretchLastSection(True); self.field_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); layout.addWidget(self.field_table, 1)
-        layout.addWidget(QLabel("AI 生成方案（只生成 Schema，需在上方确认或修改后再生成 Excel）"))
+        self.ai_toggle = QCheckBox("使用 AI 生成方案（默认收起）")
+        self.ai_toggle.setChecked(False)
+        layout.addWidget(self.ai_toggle)
+        self.ai_panel = QWidget()
+        ai_layout = QVBoxLayout(self.ai_panel)
+        ai_layout.setContentsMargins(0, 0, 0, 0)
+        ai_layout.addWidget(QLabel("AI 只生成 Schema，需在上方确认或修改后再生成 Excel。"))
         self.ai_input = QTextEdit(); self.ai_input.setPlaceholderText("例如：给我做一个9月份课堂查课表，要姓名、学号、班级、日期、课程、应到、实到和到课率。")
-        layout.addWidget(self.ai_input)
+        ai_layout.addWidget(self.ai_input)
         self.ai_generate_button = QPushButton("生成 AI 方案")
         self.ai_generate_button.clicked.connect(self.generate_ai_schema)
         self.ai_status = QLabel("")
         self.ai_status.setObjectName("subtitle")
-        layout.addWidget(self.ai_generate_button)
-        layout.addWidget(self.ai_status)
+        ai_layout.addWidget(self.ai_generate_button)
+        ai_layout.addWidget(self.ai_status)
+        self.ai_toggle.toggled.connect(self.ai_panel.setVisible)
+        self.ai_panel.setVisible(False)
+        layout.addWidget(self.ai_panel)
         actions = QHBoxLayout(); new = QPushButton("新建模板"); generate = QPushButton("生成 Excel 模板"); new.clicked.connect(self.new_template); generate.clicked.connect(self.generate_template); actions.addWidget(new); actions.addStretch(); actions.addWidget(generate); layout.addLayout(actions)
         return page
 
@@ -109,13 +161,96 @@ class TemplatePage(QWidget):
     def edit_style(self):
         dialog = StyleDialog(self.style, self)
         if dialog.exec():
-            self.style = dialog.result_style()
+            self.style = replace(dialog.result_style(), preset="自定义")
+            self._sync_style_controls()
+
+    def _sync_style_controls(self) -> None:
+        index = self.style_preset.findData(self.style.preset)
+        self.style_preset.setCurrentIndex(index if index >= 0 else self.style_preset.findData("自定义"))
+        self.style_font_size.setValue(self.style.overall_font_size)
+        self.style_header_alignment.setCurrentIndex(max(0, self.style_header_alignment.findData(self.style.header_horizontal_alignment)))
+        self.style_body_alignment.setCurrentIndex(max(0, self.style_body_alignment.findData(self.style.body_horizontal_alignment)))
+        self.style_row_height.setValue(int(self.style.body_row_height))
+        self.style_border_enabled.setChecked(self.style.border_enabled)
+        self.style_auto_fit.setChecked(self.style.auto_fit)
+        self.style_freeze.setChecked(self.style.freeze_header)
+        self.style_filter.setChecked(self.style.auto_filter)
+
+    @staticmethod
+    def _alignment_box(value: str) -> QComboBox:
+        box = QComboBox()
+        for label, alignment in (("左对齐", "left"), ("居中", "center"), ("右对齐", "right")):
+            box.addItem(label, alignment)
+        box.setCurrentIndex(max(0, box.findData(value)))
+        return box
 
     def _student_related_changed(self, selected: bool):
         if selected:
             existing = {field.standard_field for field in self.fields}
             self.fields = [core_field_schema(item) for item in (StandardField.NAME.value, StandardField.STUDENT_NUMBER.value, StandardField.CLASS_NAME.value) if item not in existing] + self.fields
             self._render_fields()
+
+    def _generation_mode_changed(self, _index: int | None = None) -> None:
+        mode = self.generation_mode.currentData()
+        self.class_box.setVisible(mode == "class")
+        self.select_students_button.setVisible(mode == "selected")
+
+    def set_generation_mode(self, mode: str) -> None:
+        index = self.generation_mode.findData(mode)
+        if index < 0:
+            raise ValueError("未知的预填方式。")
+        self.generation_mode.setCurrentIndex(index)
+
+    def set_selected_students(self, students) -> None:
+        self._selected_students = list(students)
+
+    def select_students(self) -> None:
+        dialog = StudentSelectionDialog(self.service.master, self._selected_students, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.set_selected_students(dialog.selected_students())
+
+    def prefill_rows(self, schema: TemplateSchema) -> list[dict[str, object]]:
+        mode = self.generation_mode.currentData()
+        return self.service.prefill_rows(
+            schema,
+            mode,
+            class_name=self.class_box.currentData() if mode == "class" else None,
+            student_ids=[student.id for student in self._selected_students if student.id is not None] if mode == "selected" else None,
+        )
+
+    def _confirm_missing_prefill_identity_fields(self) -> None:
+        if self.generation_mode.currentData() not in {"class", "selected"}:
+            return
+        added = []
+        for standard in PREFILL_IDENTITY_FIELDS:
+            if self._has_identity_field(standard):
+                continue
+            label = FIELD_LABELS[standard]
+            answer = QMessageBox.question(
+                self,
+                "添加身份字段",
+                f"当前模板没有‘{label}’字段，是否添加？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                added.append(core_field_schema(standard.value))
+        if added:
+            self.fields.extend(added)
+            self._render_fields()
+
+    def _has_identity_field(self, standard: StandardField) -> bool:
+        field_type = {
+            StandardField.NAME: "name",
+            StandardField.STUDENT_NUMBER: "student_number",
+            StandardField.CLASS_NAME: "class_name",
+        }[standard]
+        return any(
+            field.standard_field == standard.value
+            or field.field_type == field_type
+            or field.name == FIELD_LABELS[standard]
+            for field in self.fields
+        )
 
     def add_standard(self):
         standard = self.standard_box.currentData()
@@ -152,12 +287,42 @@ class TemplatePage(QWidget):
         return TemplateSchema(self.name.text().strip(), self.student_related.isChecked(), self.description.text().strip() or None, self.rows.value(), [SheetSchema(self.sheet_name.text().strip(), list(self.fields))], self.style)
 
     def generate_template(self):
+        self._confirm_missing_prefill_identity_fields()
+        self.style = self._style_from_panel()
         style = self._style_for_generation()
         if style is None:
             return
-        try: artifact = self.service.create(replace(self._schema(), style=style))
+        schema = replace(self._schema(), style=style)
+        suggested = f"exports/{schema.template_name or '未命名模板'}.xlsx"
+        output, _ = QFileDialog.getSaveFileName(self, "另存模板", suggested, "Excel 工作簿 (*.xlsx)")
+        if not output:
+            return
+        try:
+            path = self.service.generate(schema, output, self.prefill_rows(schema))
         except ValueError as error: QMessageBox.warning(self, "无法生成", str(error)); return
-        QMessageBox.information(self, "生成完成", f"模板已生成：{artifact.workbook_path}"); self.refresh()
+        QMessageBox.information(self, "生成完成", f"模板已生成：{path}"); self.refresh()
+
+    def _style_from_panel(self):
+        preset = self.style_preset.currentData()
+        base = minimal_style() if preset == "极简表格" else preset_style(preset)
+        if preset == "自定义":
+            base = replace(self.style, preset="自定义")
+        if base.title_mode == "ask":
+            base = replace(base, title_mode="none", show_main_title=False, main_title="")
+        return replace(
+            base,
+            overall_font_size=self.style_font_size.value(),
+            header_font_size=self.style_font_size.value(),
+            body_font_size=self.style_font_size.value(),
+            header_horizontal_alignment=self.style_header_alignment.currentData(),
+            body_horizontal_alignment=self.style_body_alignment.currentData(),
+            body_row_height=self.style_row_height.value(),
+            border_enabled=self.style_border_enabled.isChecked(),
+            auto_fit=self.style_auto_fit.isChecked(),
+            freeze_mode="header" if self.style_freeze.isChecked() else "none",
+            freeze_header=self.style_freeze.isChecked(),
+            auto_filter=self.style_filter.isChecked(),
+        )
 
     def _style_for_generation(self):
         style = self.style
@@ -225,7 +390,7 @@ class TemplatePage(QWidget):
             self.ai_generate_button.setEnabled(True)
 
     def _load_schema(self, schema: TemplateSchema):
-        self.name.setText(schema.template_name); self.description.setText(schema.description or ""); self.rows.setValue(schema.default_rows); self.sheet_name.setText(schema.sheets[0].name); self.student_related.blockSignals(True); self.student_related.setChecked(schema.student_related); self.student_related.blockSignals(False); self.fields = list(schema.sheets[0].fields); self.style = schema.style; self._render_fields()
+        self.name.setText(schema.template_name); self.description.setText(schema.description or ""); self.rows.setValue(schema.default_rows); self.sheet_name.setText(schema.sheets[0].name); self.student_related.blockSignals(True); self.student_related.setChecked(schema.student_related); self.student_related.blockSignals(False); self.fields = list(schema.sheets[0].fields); self.style = schema.style; self._sync_style_controls(); self._render_fields()
 
     def _selected_name(self) -> str | None:
         row = self.template_table.currentRow(); return self.template_table.item(row, 0).text() if row >= 0 and self.template_table.item(row, 0) else None

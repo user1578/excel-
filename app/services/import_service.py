@@ -11,8 +11,9 @@ from typing import Callable
 
 from app.models.field_mapping import DetectedField, StandardField
 from app.models.import_session import ImportSession
+from app.models.pending_resolution import PendingResolutionOutcome, PendingResolutionResult
 from app.models.parsed_record import ParsedRecord
-from app.parsers.excel_reader import list_sheets, read_raw
+from app.parsers.excel_reader import list_sheets, read_raw_with_context
 from app.parsers.field_detector import detect_field
 from app.parsers.header_detector import detect_header
 from app.repositories.field_mapping_repository import FieldMappingRepository
@@ -61,9 +62,10 @@ class ImportService:
 
     def analyze(self, path: str | Path, sheet_name: str | None = None, header_row: int | None = None) -> ImportSession:
         source = Path(path)
-        frame = read_raw(source, sheet_name)
+        raw_workbook = read_raw_with_context(source, sheet_name)
+        frame = raw_workbook.frame
         detected = detect_header(frame) if header_row is None else (header_row, 100, "人工选择")
-        session = ImportSession(source, sheet_name, frame, *detected)
+        session = ImportSession(source, sheet_name, frame, *detected, date_context=raw_workbook.date_context)
         session.fields = self._detect_fields(session)
         return session
 
@@ -86,15 +88,30 @@ class ImportService:
             raw = {session.headers[i]: row[i] for i in range(len(session.headers)) if session.headers[i]}
             normalized: dict[str, str] = {}
             sources: dict[str, str] = {}
+            date_issues: list[str] = []
             for i, field in mapping.items():
                 if field in (StandardField.IGNORE, StandardField.OTHER) or i >= len(row):
                     continue
                 value = row[i]
                 if value is not None and str(value) != "nan":
-                    normalized[field.value] = normalize_date(value) if field is StandardField.DATE else normalize_text(value)
+                    if field is StandardField.DATE:
+                        context = session.date_context.get((session.header_row + offset + 1, i))
+                        date_result = normalize_date(
+                            value,
+                            date_semantic=context.date_semantic if context else False,
+                            excel_epoch=context.excel_epoch if context else None,
+                        )
+                        normalized[field.value] = date_result.value
+                        if date_result.value and not date_result.is_valid:
+                            date_issues.append("INVALID_DATE")
+                    else:
+                        normalized[field.value] = normalize_text(value)
                     sources[field.value] = "原始数据"
             record = ParsedRecord(session.header_row + offset + 2, raw, normalized, sources, source_file=session.file_path.name, sheet_name=session.sheet_name)
             self.matcher.match(record)
+            record.issues.extend(date_issues)
+            if date_issues and record.match_status == "正常":
+                record.match_status = "待确认"
             session.records.append(record)
         if save:
             for i, field in mapping.items():
@@ -186,7 +203,7 @@ class ImportService:
         student_id: int | None = None,
         resolution_note: str = "人工确认后导入",
         confirm_possible_duplicate: bool = False,
-    ) -> int | None:
+    ) -> PendingResolutionResult:
         """人工确认单条待处理状态后写入正式考勤记录，并标记该待确认项已解决。"""
         with self.database.transaction() as connection:
             pending = self.repository.get_pending(pending_id, connection)
@@ -208,18 +225,22 @@ class ImportService:
             values = self._attendance_values(int(pending["task_id"]), int(pending["source_file_id"]), record, entry)
             duplicate_kind = self.repository.find_record_duplicate(connection, values)
             if duplicate_kind == "EXACT_DUPLICATE":
+                message = "人工确认后发现正式记录已存在，完全重复未再次导入。"
                 self.repository.resolve_pending(connection, pending_id, {
-                    "action": "skipped_exact_duplicate", "note": resolution_note, "student_id": student_id,
+                    "action": "skipped_exact_duplicate", "note": resolution_note, "message": message, "student_id": student_id,
                 })
-                return None
+                return PendingResolutionResult(PendingResolutionOutcome.EXACT_DUPLICATE_SKIPPED, message=message)
             if duplicate_kind == "POSSIBLE_DUPLICATE" and not confirm_possible_duplicate:
-                raise PendingResolutionError("重新查重发现可能重复记录，请进行二次明确确认后再导入。")
+                return PendingResolutionResult(
+                    PendingResolutionOutcome.POSSIBLE_DUPLICATE_REQUIRES_CONFIRMATION,
+                    message="重新查重发现可能重复记录，请进行二次明确确认后再导入。",
+                )
             attendance_id = self.repository.create_attendance(connection, values)
             self.repository.resolve_pending(connection, pending_id, {
                 "action": "imported_after_possible_duplicate_confirmation" if duplicate_kind else "imported",
                 "note": resolution_note, "student_id": student_id, "attendance_record_id": attendance_id,
             })
-            return attendance_id
+            return PendingResolutionResult(PendingResolutionOutcome.IMPORTED, attendance_id, "已写入正式考勤记录。")
 
     @staticmethod
     def _sha256(path: Path) -> str:

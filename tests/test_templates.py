@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
-from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -106,6 +106,18 @@ def test_template_manager_load_copy_delete_and_does_not_overwrite(template_setup
     assert copied.directory.exists() and copied.schema_path.exists()
     service.delete(copied.name)
     assert not copied.directory.exists()
+
+
+def test_external_generation_keeps_managed_artifact_and_prefills_requested_path(template_setup):
+    service, tmp_path = template_setup
+    output = tmp_path / "用户选择" / "外部模板.xlsx"
+
+    result = service.generate(classroom_schema(), output, prefill_rows=[{"name": "=测试学生"}])
+
+    artifact = service.list()[0]
+    assert result == output and output.exists()
+    assert artifact.workbook_path != output and artifact.workbook_path.is_file()
+    assert load_workbook(output)["数据录入"]["A2"].value == "'=测试学生"
 
 
 class FakeClient:
@@ -249,6 +261,7 @@ def test_template_page_smoke_manual_generation_and_ai_area(template_setup, monke
     page.fields.append(FieldSchema("备注")); page._render_fields()
     page.style = replace(page.style, title_mode="none")
     monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(tmp_path / "手动学生表.xlsx"), ""))
     page.generate_template()
     assert page.template_table.rowCount() == 1
     page.template_table.selectRow(0); page.open_selected()

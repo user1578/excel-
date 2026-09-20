@@ -18,7 +18,15 @@ class MergeExportService:
     def __init__(self, exports_directory: str | Path | None = None) -> None:
         self.exports_directory = Path(exports_directory or Path(__file__).resolve().parents[2] / "exports")
 
-    def export(self, result: MergeResult, allow_unresolved: bool = False) -> Path:
+    def export(
+        self,
+        result: MergeResult,
+        output_path: str | Path,
+        allow_unresolved: bool = False,
+    ) -> Path:
+        path = Path(output_path)
+        if path.suffix.lower() != ".xlsx":
+            raise ValueError("汇总结果只能导出为 .xlsx 文件。")
         if result.unresolved_conflicts and not allow_unresolved:
             raise ValueError("仍有未解决字段冲突；请先解决，或在界面中明确确认后导出。")
         workbook = Workbook()
@@ -28,8 +36,7 @@ class MergeExportService:
         self._write_notes(workbook.create_sheet("汇总说明"), result)
         if result.conflicts:
             self._write_conflicts(workbook.create_sheet("字段冲突"), result)
-        self.exports_directory.mkdir(parents=True, exist_ok=True)
-        path = self._unique_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         workbook.save(path)
         load_workbook(path).close()
         return path
@@ -72,7 +79,10 @@ class MergeExportService:
     @staticmethod
     def _unlinked_count(result: MergeResult) -> int:
         """unresolved 与 unmatched 都代表未成功关联，索引去重避免重复统计。"""
-        unresolved = set(result.unresolved_record_indexes)
+        unresolved = {
+            index for index, record in enumerate(result.records)
+            if getattr(record, "match_status", None) == "unresolved"
+        }
         unmatched = {
             index for index, record in enumerate(result.records)
             if getattr(record, "match_status", None) == "unmatched"
@@ -87,12 +97,3 @@ class MergeExportService:
             source_b = f"{conflict.source_b.source_file}/{conflict.source_b.source_sheet or 'CSV'}:{conflict.source_b.source_row}"
             sheet.append([conflict.id, conflict.field, safe_excel_value(conflict.value_a), source_a, safe_excel_value(conflict.value_b), source_b, conflict.resolution.value, safe_excel_value(conflict.resolved_value or "")])
         sheet.freeze_panes = "A2"
-
-    def _unique_path(self) -> Path:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = self.exports_directory / f"资料汇总_{stamp}.xlsx"
-        suffix = 2
-        while path.exists():
-            path = self.exports_directory / f"资料汇总_{stamp}_{suffix}.xlsx"
-            suffix += 1
-        return path

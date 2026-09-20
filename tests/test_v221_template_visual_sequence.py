@@ -81,12 +81,12 @@ def test_sequence_detection_modes_and_preserves_template_style(tmp_path):
     service = WorkbookFillService(tmp_path / "exports")
     mappings = service.default_mappings(analysis, _dataset())
     assert mappings["序号"] == AUTO_SEQUENCE and "编号信息" not in mappings
-    result = service.fill(analysis, _dataset(), mappings, USE_NEW_VALUE, sequence_start=1, sequence_mode=SEQUENCE_FILL_BLANK)
+    result = service.fill(analysis, _dataset(), mappings, USE_NEW_VALUE, sequence_start=1, sequence_mode=SEQUENCE_FILL_BLANK, output_path=tmp_path / "填充.xlsx", compatibility_accepted=True)
     sheet = load_workbook(result.output_path)["名单"]
     assert [sheet.cell(row, 1).value for row in (2, 3, 4)] == [100, 2, 3]
     assert (sheet["A3"].font.bold, sheet["A3"].fill.fgColor.rgb, sheet["A3"].border.left.style, sheet.row_dimensions[3].height, sheet.column_dimensions["A"].width) == (True, "00DDEEFF", "thin", 25, 13)
-    renumber = service.fill(analysis, _dataset(), mappings, USE_NEW_VALUE, sequence_start=1, sequence_mode=SEQUENCE_RENUMBER)
-    untouched = service.fill(analysis, _dataset(), mappings, USE_NEW_VALUE, sequence_start=1, sequence_mode=SEQUENCE_NONE)
+    renumber = service.fill(analysis, _dataset(), mappings, USE_NEW_VALUE, sequence_start=1, sequence_mode=SEQUENCE_RENUMBER, output_path=tmp_path / "重排.xlsx", compatibility_accepted=True)
+    untouched = service.fill(analysis, _dataset(), mappings, USE_NEW_VALUE, sequence_start=1, sequence_mode=SEQUENCE_NONE, output_path=tmp_path / "保留.xlsx", compatibility_accepted=True)
     assert [load_workbook(renumber.output_path)["名单"].cell(row, 1).value for row in (2, 3, 4)] == [1, 2, 3]
     assert load_workbook(untouched.output_path)["名单"]["A2"].value == 100
 
@@ -98,7 +98,7 @@ def test_sequence_stays_continuous_after_skipped_row_and_can_be_mapped_manually(
     service = WorkbookFillService(tmp_path / "exports")
     mappings = {"排名编号": AUTO_SEQUENCE, "姓名": "name"}
     preview = service.preview(analysis, _dataset(), mappings, sequence_start=10, sequence_mode=SEQUENCE_RENUMBER)
-    result = service.fill(analysis, _dataset(), mappings, SKIP_CONFLICTING_ROW, sequence_start=10, sequence_mode=SEQUENCE_RENUMBER)
+    result = service.fill(analysis, _dataset(), mappings, SKIP_CONFLICTING_ROW, sequence_start=10, sequence_mode=SEQUENCE_RENUMBER, output_path=tmp_path / "跳过.xlsx", compatibility_accepted=True)
     sheet = load_workbook(result.output_path)["名单"]
     assert (preview.sequence_target, preview.sequence_start, result.skipped_rows) == ("排名编号", 10, 1)
     assert (sheet["A3"].value, sheet["A4"].value) == (10, 11)

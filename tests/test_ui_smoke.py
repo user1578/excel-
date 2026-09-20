@@ -9,19 +9,23 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
 
 from app.models.class_record import ClassRecord
 from app.models.dormitory import Dormitory
 from app.models.student import Student
 from app.models.task import Task
-from app.models.merge_models import ConflictResolution
+from app.models.merge_models import ConflictResolution, MergeMode, MergeResult, MergedRecord
+from app.models.fill_models import FillPreview, FillResult, TemplateAnalysis
 from app.models.table_dataset import Provenance, TableDataset, TableRow
 from app.repositories.database import DatabaseManager
 from app.services.dataset_merge_service import DatasetMergeService
 from app.services.master_data_service import MasterDataService
 from app.ui.main_window import MainWindow
 from app.ui.dialogs.class_students_dialog import ClassExportDialog, ClassStudentsDialog
+from app.ui.merge_page import MergePage, SourceSelection
+from app.services.data_workspace_service import DataWorkspaceService
+from app.ui.workbook_fill_page import WorkbookFillPage
 
 
 @pytest.fixture(scope="session")
@@ -82,6 +86,18 @@ def test_all_navigation_pages_open_smoke(application, tmp_path):
     window.close()
 
 
+def test_main_window_builds_merge_fill_and_template_pages(application, tmp_path):
+    database = DatabaseManager(tmp_path / "v2-main-window.db")
+    database.initialize()
+    window = MainWindow(MasterDataService(database))
+
+    assert window.content_stack.indexOf(window.merge_page) >= 0
+    assert window.content_stack.indexOf(window.workbook_fill_page) >= 0
+    assert window.content_stack.indexOf(window.template_page) >= 0
+
+    window.close()
+
+
 def test_conflict_resolution_refreshes_workspace_used_by_workbook_fill_page(application, tmp_path):
     database = DatabaseManager(tmp_path / "workspace-smoke.db")
     database.initialize()
@@ -102,6 +118,80 @@ def test_conflict_resolution_refreshes_workspace_used_by_workbook_fill_page(appl
     assert window.data_workspace.current_dataset.rows[0].values["phone"] == "13900000001"
     assert window.workbook_fill_page.dataset.rows[0].values["phone"] == "13900000001"
     window.close()
+
+
+def _merge_page_with_result(application):
+    first = TableDataset(["name", "student_number", "class_name", "phone"], [
+        TableRow({"name": "测试学生甲", "student_number": "20260001", "class_name": "测试班2401", "phone": "13800000001"}, Provenance("基础.xlsx", "资料", 2)),
+        TableRow({"name": "测试学生乙", "student_number": "", "class_name": "测试班2401", "phone": ""}, Provenance("基础.xlsx", "资料", 3)),
+    ], "基础.xlsx", "资料", 1, column_labels={"name": "姓名", "student_number": "学号", "class_name": "班级", "phone": "电话"})
+    second = TableDataset(["name", "student_number", "class_name", "phone"], [
+        TableRow({"name": "测试学生甲", "student_number": "20260001", "class_name": "测试班2401", "phone": "13900000001"}, Provenance("补充.xlsx", "资料", 2)),
+        TableRow({"name": "测试学生丙", "student_number": "", "class_name": "测试班2401", "phone": ""}, Provenance("补充.xlsx", "资料", 3)),
+    ], "补充.xlsx", "资料", 1, column_labels={"name": "姓名", "student_number": "学号", "class_name": "班级", "phone": "电话"})
+    result = DatasetMergeService().merge_by_student([first, second])
+    workspace = DataWorkspaceService()
+    page = MergePage(workspace)
+    page.sources = [
+        SourceSelection(Path("基础.xlsx"), "资料", dataset=first),
+        SourceSelection(Path("补充.xlsx"), "资料", dataset=second),
+    ]
+    page.result = result
+    workspace.set_merge_result(result)
+    page._render_result()
+    return page, result, workspace
+
+
+def test_merge_export_cancel_does_not_call_service(application, monkeypatch):
+    page, _result, _workspace = _merge_page_with_result(application)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: ("", ""))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(page.export_service, "export", lambda *_args, **_kwargs: pytest.fail("取消时不得调用导出服务"))
+
+    page.export_result()
+
+    page.close()
+
+
+def test_merge_export_passes_user_selected_path(application, monkeypatch, tmp_path):
+    page, _result, _workspace = _merge_page_with_result(application)
+    target = tmp_path / "用户选择" / "汇总.xlsx"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(target), ""))
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+
+    def export(_result, output_path, allow_unresolved=False):
+        assert output_path == target
+        assert allow_unresolved is True
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fake workbook")
+        return target
+
+    monkeypatch.setattr(page.export_service, "export", export)
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+    page.export_result()
+
+    assert target.exists()
+    page.close()
+
+
+def test_merge_page_filters_rendered_rows_and_summary_without_mutating_result(application):
+    page, result, workspace = _merge_page_with_result(application)
+    assert hasattr(page, "filter_box")
+    assert page.preview.rowCount() == 3
+    assert page.summary_values["source_files"].text() == "2"
+    assert page.summary_values["raw_rows"].text() == "4"
+    assert page.summary_values["matched"].text() == "1"
+    assert page.summary_values["unmatched"].text() == "2"
+    assert page.summary_values["conflicts"].text() == "1"
+    assert page.summary_values["missing"].text() == "2"
+
+    original_rows = [dict(record.values) for record in result.records]
+    for key, expected_rows in (("conflicts", 1), ("missing", 2), ("unmatched", 2), ("all", 3)):
+        page.filter_box.setCurrentIndex(page.filter_box.findData(key))
+        assert page.preview.rowCount() == expected_rows
+        assert [dict(record.values) for record in result.records] == original_rows
+        assert workspace.current_merge_result is result
+    page.close()
 
 
 def test_v21_student_and_class_export_dialogs_smoke(application, tmp_path):
@@ -137,3 +227,122 @@ def test_class_student_selection_survives_filtering_and_export_rows_are_dynamic(
     export_dialog._remove_action_row(export_dialog.table.cellWidget(2, 5))
     assert len(export_dialog.columns()) == len(original) - 1 and len({item.title for item in export_dialog.columns()}) == len(export_dialog.columns())
     students_dialog.close(); export_dialog.close()
+
+
+class _UnavailableComForPage:
+    def is_available(self):
+        return False
+
+
+class _RecordingFillCoordinator:
+    def __init__(self):
+        self.com_service = _UnavailableComForPage()
+        self.list_calls = []
+        self.fill_calls = []
+
+    def list_sheets(self, path, compatibility_accepted=False):
+        self.list_calls.append((Path(path), compatibility_accepted))
+        return ["报名"]
+
+    def analyze(self, path, sheet_name, header_row=None, compatibility_accepted=False):
+        return TemplateAnalysis(Path(path), sheet_name, header_row or 1, {"姓名": 1})
+
+    def default_mappings(self, _analysis, _dataset):
+        return {"姓名": "name"}
+
+    def preview(self, _analysis, dataset, mappings, *_args, **_kwargs):
+        return FillPreview(len(dataset.rows), mappings, 0, [])
+
+    def fill(self, _analysis, dataset, _mappings, *_args, **kwargs):
+        self.fill_calls.append(kwargs)
+        return FillResult(Path(kwargs["output_path"]), len(dataset.rows), 0, 0, "compatibility")
+
+
+def _fill_page(application, tmp_path):
+    database = DatabaseManager(tmp_path / "fill-page.db")
+    database.initialize()
+    workspace = DataWorkspaceService()
+    page = WorkbookFillPage(workspace, MasterDataService(database))
+    page.coordinator = _RecordingFillCoordinator()
+    return page, workspace
+
+
+def test_fill_page_requires_explicit_compatibility_consent_to_open_xlsx(application, monkeypatch, tmp_path):
+    page, _workspace = _fill_page(application, tmp_path)
+    template = tmp_path / "模板.xlsx"
+    from openpyxl import Workbook
+    Workbook().save(template)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *_: (str(template), ""))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+
+    page.choose_template()
+
+    assert page.coordinator.list_calls == [(template, True)]
+    assert page.compatibility_accepted is True
+    page.close()
+
+
+def test_fill_page_cancel_does_not_call_coordinator(application, monkeypatch, tmp_path):
+    page, _workspace = _fill_page(application, tmp_path)
+    page.template_path = tmp_path / "模板.xlsx"
+    page.analysis = TemplateAnalysis(page.template_path, "报名", 1, {"姓名": 1})
+    page.dataset = TableDataset(["name"], [TableRow({"name": "测试学生"}, Provenance("虚构.xlsx", "报名", 2))], "虚构.xlsx", "报名", 1)
+    page._refresh_mapping_table()
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: ("", ""))
+
+    page.output()
+
+    assert page.coordinator.fill_calls == []
+    page.close()
+
+
+def test_fill_page_confirms_unresolved_merge_and_passes_flags(application, monkeypatch, tmp_path):
+    page, workspace = _fill_page(application, tmp_path)
+    result = MergeResult(
+        MergeMode.STUDENT,
+        ["name"],
+        {"name": "姓名"},
+        [MergedRecord({"name": "甲"})],
+        unresolved_record_indexes=[0],
+    )
+    workspace.set_merge_result(result)
+    page.template_path = tmp_path / "模板.xlsx"
+    page.analysis = TemplateAnalysis(page.template_path, "报名", 1, {"姓名": 1})
+    page.dataset = workspace.current_dataset
+    page.compatibility_accepted = True
+    page._refresh_mapping_table()
+    target = tmp_path / "结果.xlsx"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(target), ""))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+
+    page.output()
+
+    assert page.coordinator.fill_calls == [{
+        "output_path": target,
+        "compatibility_accepted": True,
+        "merge_has_unresolved": True,
+        "allow_unresolved_merge": True,
+    }]
+    page.close()
+
+
+def test_fill_page_reuses_student_selection_dialog_for_selected_source(application, monkeypatch, tmp_path):
+    database = DatabaseManager(tmp_path / "selected-source.db")
+    database.initialize()
+    master = MasterDataService(database)
+    master.create_class(ClassRecord("测试班2401"))
+    student = master.create_student(Student("测试学生甲", "20260001", "测试班2401"))
+    page = WorkbookFillPage(DataWorkspaceService(), master)
+
+    class Dialog:
+        def __init__(self, *_args, **_kwargs): pass
+        def exec(self): return QDialog.DialogCode.Accepted
+        def selected_students(self): return [student]
+
+    monkeypatch.setattr("app.ui.workbook_fill_page.StudentSelectionDialog", Dialog)
+    page.source_box.setCurrentIndex(page.source_box.findText("指定学生"))
+    page.choose_source()
+
+    assert page.dataset is not None and page.dataset.rows[0].values["student_number"] == "20260001"
+    page.close()

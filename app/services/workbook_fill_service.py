@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import copy
-from datetime import datetime
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -12,7 +11,9 @@ from openpyxl.formula.translate import Translator
 from app.models.fill_models import FillPreview, FillResult, TemplateAnalysis
 from app.models.table_dataset import TableDataset
 from app.parsers.field_detector import ALIASES
+from app.services.atomic_workbook_output import AtomicFileOutput
 from app.utils.excel_safety import safe_excel_value
+from app.utils.excel_images import insert_limited_photo
 from app.utils.value_normalizer import normalize_column_name
 
 
@@ -82,53 +83,75 @@ class WorkbookFillService:
         existing_value_strategy: str = KEEP_EXISTING,
         sequence_start: int = 1,
         sequence_mode: str = SEQUENCE_FILL_BLANK,
+        *,
+        output_path: str | Path | None = None,
+        compatibility_accepted: bool = False,
     ) -> FillResult:
+        if not compatibility_accepted:
+            raise ValueError("需要明确接受 openpyxl 兼容模式后才能填写模板。")
+        if output_path is None:
+            raise ValueError("请提供明确的输出路径。")
         if existing_value_strategy not in {KEEP_EXISTING, USE_NEW_VALUE, SKIP_CONFLICTING_ROW}:
             raise ValueError("未知的模板已有值处理策略。")
         self._validate_mappings(analysis, dataset, mappings)
         sequence_target = self._sequence_target(mappings, sequence_mode)
         self._validate_sequence(sequence_target, sequence_start, sequence_mode)
         active_mappings = {target: source for target, source in mappings.items() if source != AUTO_SEQUENCE or sequence_target is not None}
-        workbook = load_workbook(analysis.template_path, data_only=False)
-        try:
-            sheet = workbook[analysis.sheet_name]
-            warnings = self._merged_warnings(sheet, analysis, len(dataset.rows), active_mappings)
-            if warnings:
-                raise MergedCellWriteError("；".join(warnings))
-            data_start = analysis.header_row + 1
-            written_rows = skipped_rows = preserved_cells = 0
-            next_sequence = sequence_start
-            for offset, source_row in enumerate(dataset.rows):
-                row_number = data_start + offset
-                if row_number > data_start:
-                    self._copy_template_row(sheet, data_start, row_number)
-                targets = [(target, analysis.target_columns[target], source_row.values.get(source_key, "")) for target, source_key in mappings.items() if source_key != AUTO_SEQUENCE]
-                existing = [sheet.cell(row_number, column).value not in (None, "") for _target, column, _value in targets]
-                if existing_value_strategy == SKIP_CONFLICTING_ROW and any(existing):
-                    skipped_rows += 1
+        with AtomicFileOutput(analysis.template_path, output_path) as transaction:
+            workbook = load_workbook(analysis.template_path, data_only=False)
+            try:
+                written_rows, skipped_rows, preserved_cells = self._write_workbook(
+                    workbook, analysis, dataset, mappings, active_mappings, existing_value_strategy,
+                    sequence_target, sequence_start, sequence_mode,
+                )
+                workbook.save(transaction.temporary_path)
+            finally:
+                workbook.close()
+            transaction.commit(self._validate_output)
+        return FillResult(Path(output_path), written_rows, skipped_rows, preserved_cells)
+
+    def _write_workbook(self, workbook, analysis, dataset, mappings, active_mappings, existing_value_strategy, sequence_target, sequence_start, sequence_mode):
+        sheet = workbook[analysis.sheet_name]
+        warnings = self._merged_warnings(sheet, analysis, len(dataset.rows), active_mappings)
+        if warnings:
+            raise MergedCellWriteError("；".join(warnings))
+        data_start = analysis.header_row + 1
+        written_rows = skipped_rows = preserved_cells = 0
+        next_sequence = sequence_start
+        for offset, source_row in enumerate(dataset.rows):
+            row_number = data_start + offset
+            if row_number > data_start:
+                self._copy_template_row(sheet, data_start, row_number)
+            targets = [(target, analysis.target_columns[target], source_key, source_row.values.get(source_key, "")) for target, source_key in mappings.items() if source_key != AUTO_SEQUENCE]
+            existing = [sheet.cell(row_number, column).value not in (None, "") for _target, column, _source, _value in targets]
+            if existing_value_strategy == SKIP_CONFLICTING_ROW and any(existing):
+                skipped_rows += 1
+                continue
+            wrote = False
+            for (target, column, source_key, value), has_existing in zip(targets, existing):
+                if has_existing and existing_value_strategy == KEEP_EXISTING:
+                    preserved_cells += 1
                     continue
-                wrote = False
-                for (_target, column, value), has_existing in zip(targets, existing):
-                    if has_existing and existing_value_strategy == KEEP_EXISTING:
-                        preserved_cells += 1
-                        continue
-                    sheet.cell(row_number, column).value = safe_excel_value(value)
+                cell = sheet.cell(row_number, column)
+                if source_key == "photo" and value not in (None, ""):
+                    insert_limited_photo(sheet, cell, value, target, row_number)
+                else:
+                    cell.value = safe_excel_value(value)
+                wrote = True
+            if sequence_target is not None:
+                sequence_cell = sheet.cell(row_number, analysis.target_columns[sequence_target])
+                if sequence_mode == SEQUENCE_RENUMBER or sequence_cell.value in (None, ""):
+                    sequence_cell.value = next_sequence
                     wrote = True
-                if sequence_target is not None:
-                    sequence_cell = sheet.cell(row_number, analysis.target_columns[sequence_target])
-                    if sequence_mode == SEQUENCE_RENUMBER or sequence_cell.value in (None, ""):
-                        sequence_cell.value = next_sequence
-                        wrote = True
-                    next_sequence += 1
-                if wrote:
-                    written_rows += 1
-            self.exports_directory.mkdir(parents=True, exist_ok=True)
-            output = self._unique_output_path(analysis.template_path)
-            workbook.save(output)
-        finally:
-            workbook.close()
-        load_workbook(output, data_only=False).close()
-        return FillResult(output, written_rows, skipped_rows, preserved_cells)
+                next_sequence += 1
+            if wrote:
+                written_rows += 1
+        return written_rows, skipped_rows, preserved_cells
+
+    @staticmethod
+    def _validate_output(path: Path) -> None:
+        workbook = load_workbook(path, data_only=False)
+        workbook.close()
 
     @staticmethod
     def _validate_mappings(analysis: TemplateAnalysis, dataset: TableDataset, mappings: dict[str, str]) -> None:
@@ -184,13 +207,3 @@ class WorkbookFillService:
                         if (row, column) != (merged.min_row, merged.min_col):
                             warnings.append(f"字段“{target}”位于合并单元格 {merged.coord} 的非左上角，不能写入")
         return warnings
-
-    def _unique_output_path(self, template_path: Path) -> Path:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = f"{template_path.stem}_已填写_{stamp}"
-        path = self.exports_directory / f"{base}.xlsx"
-        suffix = 2
-        while path.exists():
-            path = self.exports_directory / f"{base}_{suffix}.xlsx"
-            suffix += 1
-        return path

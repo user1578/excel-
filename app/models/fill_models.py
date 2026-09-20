@@ -32,3 +32,4 @@ class FillResult:
     written_rows: int
     skipped_rows: int
     preserved_cells: int
+    engine: str = "compatibility"

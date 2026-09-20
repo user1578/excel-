@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from importlib import import_module
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -68,10 +69,11 @@ def test_fill_creates_new_file_preserves_template_and_copies_style_and_formulas(
     service = WorkbookFillService(tmp_path / "exports")
     mappings = service.default_mappings(analysis, source_dataset())
     assert mappings == {"序号": AUTO_SEQUENCE, "学生姓名": "name", "学籍号": "student_number", "所在行政班": "class_name", "联系电话": "phone", "备注": "custom:note"}
-    result = service.fill(analysis, source_dataset(), mappings, USE_NEW_VALUE)
+    result = service.fill(analysis, source_dataset(), mappings, USE_NEW_VALUE, output_path=tmp_path / "完成.xlsx", compatibility_accepted=True)
 
     assert digest(template) == before
     assert result.output_path != template and result.output_path.exists()
+    assert result.engine == "compatibility"
     workbook = load_workbook(result.output_path, data_only=False)
     sheet = workbook["汇总表"]
     assert sheet["B4"].value == "测试学生甲"
@@ -99,7 +101,7 @@ def test_existing_value_strategies_are_explicit(tmp_path, strategy, expected, sk
     make_template(template, "模板原值")
     analysis = WorkbookTemplateAnalyzer().analyze(template, "汇总表", 3)
     service = WorkbookFillService(tmp_path / "exports")
-    result = service.fill(analysis, source_dataset(), {"学生姓名": "name"}, strategy)
+    result = service.fill(analysis, source_dataset(), {"学生姓名": "name"}, strategy, output_path=tmp_path / "完成.xlsx", compatibility_accepted=True)
     sheet = load_workbook(result.output_path)["汇总表"]
     assert sheet["B4"].value == expected
     assert result.skipped_rows == skipped
@@ -117,17 +119,54 @@ def test_merged_non_anchor_is_rejected_without_changing_template(tmp_path):
     analysis = WorkbookTemplateAnalyzer().analyze(template, "汇总表", 3)
     service = WorkbookFillService(tmp_path / "exports")
     with pytest.raises(MergedCellWriteError, match="非左上角"):
-        service.fill(analysis, source_dataset(), {"所在行政班": "class_name"}, USE_NEW_VALUE)
+        service.fill(analysis, source_dataset(), {"所在行政班": "class_name"}, USE_NEW_VALUE, output_path=tmp_path / "完成.xlsx", compatibility_accepted=True)
     assert digest(template) == before
 
 
-def test_preview_reports_existing_values_and_unique_outputs(tmp_path):
+def test_preview_reports_existing_values_and_requested_outputs(tmp_path):
     template = tmp_path / "预览模板.xlsx"
     make_template(template, "模板原值")
     analysis = WorkbookTemplateAnalyzer().analyze(template, "汇总表", 3)
     service = WorkbookFillService(tmp_path / "exports")
     preview = service.preview(analysis, source_dataset(), {"学生姓名": "name"})
     assert preview.row_count == 2 and preview.existing_value_conflicts == 1
-    first = service.fill(analysis, source_dataset(), {"学生姓名": "name"}, USE_NEW_VALUE)
-    second = service.fill(analysis, source_dataset(), {"学生姓名": "name"}, USE_NEW_VALUE)
-    assert first.output_path != second.output_path
+    first = service.fill(analysis, source_dataset(), {"学生姓名": "name"}, USE_NEW_VALUE, output_path=tmp_path / "第一份.xlsx", compatibility_accepted=True)
+    second = service.fill(analysis, source_dataset(), {"学生姓名": "name"}, USE_NEW_VALUE, output_path=tmp_path / "第二份.xlsx", compatibility_accepted=True)
+    assert first.output_path.name == "第一份.xlsx" and second.output_path.name == "第二份.xlsx"
+
+
+def test_fill_rejects_same_source_and_destination_and_requires_compatibility_acceptance(tmp_path):
+    template = tmp_path / "同源模板.xlsx"
+    make_template(template)
+    analysis = WorkbookTemplateAnalyzer().analyze(template, "汇总表", 3)
+    service = WorkbookFillService(tmp_path / "exports")
+    with pytest.raises(ValueError, match="不能覆盖源模板"):
+        service.fill(analysis, source_dataset(), {"学生姓名": "name"}, output_path=template, compatibility_accepted=True)
+    with pytest.raises(ValueError, match="兼容模式"):
+        service.fill(analysis, source_dataset(), {"学生姓名": "name"}, output_path=tmp_path / "未确认.xlsx")
+
+
+def test_fill_failure_removes_temp_and_keeps_final_absent(tmp_path, monkeypatch):
+    template = tmp_path / "失败模板.xlsx"
+    target = tmp_path / "完成.xlsx"
+    make_template(template)
+    analysis = WorkbookTemplateAnalyzer().analyze(template, "汇总表", 3)
+    service = WorkbookFillService(tmp_path / "exports")
+    monkeypatch.setattr(service, "_write_workbook", lambda *_: (_ for _ in ()).throw(RuntimeError("write failed")), raising=False)
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        service.fill(analysis, source_dataset(), {"学生姓名": "name"}, output_path=target, compatibility_accepted=True)
+    assert not target.exists()
+    assert not list(tmp_path.glob("*.partial.*"))
+
+
+def test_atomic_output_without_source_supports_new_workbook(tmp_path):
+    try:
+        transaction_module = import_module("app.services.atomic_workbook_output")
+    except ModuleNotFoundError as error:
+        pytest.fail(f"缺少原子输出事务：{error}")
+    target = tmp_path / "新模板.xlsx"
+    with transaction_module.AtomicFileOutput(None, target) as transaction:
+        transaction.temporary_path.write_bytes(b"workbook")
+        transaction.commit(lambda path: path.read_bytes() == b"workbook")
+    assert target.read_bytes() == b"workbook"

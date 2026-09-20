@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import os
-import sys
-
 import pytest
 from openpyxl import Workbook, load_workbook
-from PySide6.QtWidgets import QApplication, QFileDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -17,7 +15,6 @@ from app.models.student import Student
 from app.repositories.database import DatabaseManager
 from app.services.class_export_service import ClassExportService, ExportColumn, SOURCE_CORE
 from app.services.data_workspace_service import DataWorkspaceService
-from app.services.legacy_excel_converter import LegacyExcelConversionError, LegacyExcelConverter
 from app.services.master_data_service import MasterDataService
 from app.services.template_service import TemplateService
 from app.template_engine.schema import FieldSchema, SheetSchema, TemplateSchema
@@ -109,59 +106,6 @@ def test_business_blue_class_export_reuses_renderer_and_column_width(tmp_path):
     assert sheet["A3"].border.bottom.style == "thin" and sheet.column_dimensions["A"].width == 26
 
 
-class _FakeWorkbook:
-    def __init__(self): self.closed = False
-    def SaveAs(self, path, FileFormat):
-        assert FileFormat == 51
-        Workbook().save(path)
-    def Close(self, SaveChanges=False): self.closed = True
-
-
-class _FakeExcel:
-    Visible = True
-    DisplayAlerts = True
-    def __init__(self):
-        self.workbook = _FakeWorkbook(); self.Workbooks = self
-    def Open(self, _path, ReadOnly=False):
-        assert ReadOnly is True
-        return self.workbook
-    def Quit(self): pass
-
-
-class _FakeCom:
-    def __init__(self): self.excel = _FakeExcel()
-    def DispatchEx(self, name):
-        assert name == "Excel.Application"
-        return self.excel
-
-
-class _UnavailableCom:
-    def DispatchEx(self, _name):
-        raise RuntimeError("Excel 服务不可用")
-
-
-def test_xls_converter_creates_xlsx_copy_without_changing_original(tmp_path):
-    original = tmp_path / "旧模板.xls"; original.write_bytes(b"not-a-real-xls")
-    before = original.read_bytes()
-    converted = LegacyExcelConverter(_FakeCom(), tmp_path).convert(original)
-    assert converted.suffix == ".xlsx" and converted.is_file() and original.read_bytes() == before
-    assert LegacyExcelConverter.is_legacy_template(tmp_path / "大写.XLS")
-
-
-def test_xls_converter_reports_unavailable_excel_service(tmp_path):
-    original = tmp_path / "旧模板.xls"; original.write_bytes(b"legacy")
-    with pytest.raises(LegacyExcelConversionError, match="自动化服务"):
-        LegacyExcelConverter(_UnavailableCom()).convert(original)
-
-
-def test_xls_converter_reports_missing_pywin32(tmp_path, monkeypatch):
-    original = tmp_path / "旧模板.xls"; original.write_bytes(b"legacy")
-    monkeypatch.setitem(sys.modules, "win32com", None)
-    monkeypatch.delitem(sys.modules, "win32com.client", raising=False)
-    with pytest.raises(LegacyExcelConversionError, match="pywin32"):
-        LegacyExcelConverter().convert(original)
-
-
 def test_style_and_fill_dialogs_smoke(tmp_path, monkeypatch):
     application = QApplication.instance() or QApplication([])
     master = _master(tmp_path)
@@ -171,7 +115,9 @@ def test_style_and_fill_dialogs_smoke(tmp_path, monkeypatch):
     export = ClassExportDialog(master, "测试班2401", [student])
     template = tmp_path / "填充模板.xlsx"; Workbook().save(template)
     page = WorkbookFillPage(DataWorkspaceService(), master)
+    page.coordinator.com_service = type("UnavailableCom", (), {"is_available": lambda _self: False})()
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *_args, **_kwargs: (str(template), ""))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes)
     page.choose_template(); application.processEvents()
     assert field.result_field().column_width == 18 and export.table.columnCount() == 6
     assert style.result_style().preset == "标准办公表格" and page.template_path == template
